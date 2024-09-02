@@ -22,8 +22,10 @@ from cosyvoice.utils.file_utils import logging
 class CosyVoice:
 
     def __init__(self, model_dir, load_jit=True):
+        logging.info("model_dir2222:{}".format(model_dir))
         instruct = True if '-Instruct' in model_dir else False
         self.model_dir = model_dir
+        logging.info("os.path.exists(model_dir):{}".format(os.path.exists(model_dir)))
         if not os.path.exists(model_dir):
             model_dir = snapshot_download(model_dir)
         with open('{}/cosyvoice.yaml'.format(model_dir), 'r') as f:
@@ -52,7 +54,7 @@ class CosyVoice:
         for i in self.frontend.text_normalize(tts_text, split=True):
             model_input = self.frontend.frontend_sft(i, spk_id)
             start_time = time.time()
-            logging.info('synthesis text {}'.format(i))
+            logging.info('synthesis text1 {}'.format(i))
             for model_output in self.model.inference(**model_input, stream=stream):
                 speech_len = model_output['tts_speech'].shape[1] / 22050
                 logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
@@ -60,11 +62,17 @@ class CosyVoice:
                 start_time = time.time()
 
     def inference_zero_shot(self, tts_text, prompt_text, prompt_speech_16k, stream=False):
+        # 这里做一个接口  --  做成等待式 ----  例如 ：  正在切分句子
         prompt_text = self.frontend.text_normalize(prompt_text, split=False)
         for i in self.frontend.text_normalize(tts_text, split=True):
             model_input = self.frontend.frontend_zero_shot(i, prompt_text, prompt_speech_16k)
             start_time = time.time()
-            logging.info('synthesis text {}'.format(i))
+            logging.info('synthesis text2 {}'.format(i))
+            logging.info('model_input {}'.format(model_input))
+            
+            # ------------------------------------------------------------------
+            
+            # 这里就变成 输出，  等待示例： 正在返回音频
             for model_output in self.model.inference(**model_input, stream=stream):
                 speech_len = model_output['tts_speech'].shape[1] / 22050
                 logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
@@ -77,7 +85,7 @@ class CosyVoice:
         for i in self.frontend.text_normalize(tts_text, split=True):
             model_input = self.frontend.frontend_cross_lingual(i, prompt_speech_16k)
             start_time = time.time()
-            logging.info('synthesis text {}'.format(i))
+            logging.info('synthesis text3 {}'.format(i))
             for model_output in self.model.inference(**model_input, stream=stream):
                 speech_len = model_output['tts_speech'].shape[1] / 22050
                 logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
@@ -91,7 +99,7 @@ class CosyVoice:
         for i in self.frontend.text_normalize(tts_text, split=True):
             model_input = self.frontend.frontend_instruct(i, spk_id, instruct_text)
             start_time = time.time()
-            logging.info('synthesis text {}'.format(i))
+            logging.info('synthesis text4 {}'.format(i))
             for model_output in self.model.inference(**model_input, stream=stream):
                 speech_len = model_output['tts_speech'].shape[1] / 22050
                 logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))

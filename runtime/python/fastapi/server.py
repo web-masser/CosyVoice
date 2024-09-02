@@ -4,10 +4,13 @@
 # fastapi dev --port 6006 fastapi_server.py
 # For production deployment
 # fastapi run --port 6006 fastapi_server.py
+# conda activate cosyvoice
+# python webui.py --port 50000 --model_dir pretrained_models/CosyVoice-300M
 
 import os
-import sys
-import io,time
+import sys, socket
+import io,time, datetime
+import uvicorn
 from fastapi import FastAPI, Response, File, UploadFile, Form
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware  #引入 CORS中间件模块
@@ -28,12 +31,12 @@ class LaunchFailed(Exception):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    model_dir = os.getenv("MODEL_DIR", "pretrained_models/CosyVoice-300M-SFT")
+    model_dir = os.getenv("MODEL_DIR", "D:/project/CosyVoice/pretrained_models/CosyVoice-300M")
     if model_dir:
-        logging.info("MODEL_DIR is {}", model_dir)
+        # logging.info("MODEL_DIR is {}", model_dir)
         app.cosyvoice = CosyVoice(model_dir)
         # sft usage
-        logging.info("Avaliable speakers {}", app.cosyvoice.list_avaliable_spks())
+        # logging.info("Avaliable speakers {}", app.cosyvoice.list_avaliable_spks())
     else:
         raise LaunchFailed("MODEL_DIR environment must set")
     yield
@@ -72,6 +75,30 @@ async def zeroShot(tts: str = Form(), prompt: str = Form(), audio: UploadFile = 
     prompt_speech_16k = torch.from_numpy(np.array(np.frombuffer(prompt_audio, dtype=np.int16))).unsqueeze(dim=0)
     prompt_speech_16k = prompt_speech_16k.float() / (2**15)
 
+    output = app.cosyvoice.inference_zero_shot(tts, prompt, prompt_speech_16k)
+    end = time.process_time()
+    logging.info("infer time is {} seconds", end-start)
+    return buildResponse(output['tts_speech'])
+
+# tts 输入的内容
+# prompt 录制音频的内容
+@app.get("/api/inference/app-zero-save")
+@app.post("/api/inference/app-zero-save")
+async def saveShot(userId: str = Form(), createTime: str = Form(), audio: UploadFile = File()):
+    current_time = datetime.datetime.strptime(createTime, "%Y-%m-%d %H:%M:%S").timestamp()
+    prompt_speech = load_wav(audio.file, 16000)
+    prompt_audio = (prompt_speech.numpy() * (2**15)).astype(np.int16).tobytes()
+    prompt_speech_16k = torch.from_numpy(np.array(np.frombuffer(prompt_audio, dtype=np.int16))).unsqueeze(dim=0)
+    prompt_speech_16k = prompt_speech_16k.float() / (2**15)
+    torch.save(prompt_speech_16k, "./py_data/" + userId + '-' + current_time)
+    return Response(True)
+
+@app.get("/api/inference/app-zero-output")
+@app.post("/api/inference/app-zero-output")
+async def outputShot(userId: str = Form(), createTime: str = Form(),tts: str = Form(), prompt: str = Form()):
+    start = time.process_time()
+    current_time = datetime.datetime.strptime(createTime, "%Y-%m-%d %H:%M:%S").timestamp()
+    prompt_speech_16k = torch.load("./py_data/" + userId + '-' + current_time)
     output = app.cosyvoice.inference_zero_shot(tts, prompt, prompt_speech_16k)
     end = time.process_time()
     logging.info("infer time is {} seconds", end-start)
@@ -117,3 +144,9 @@ async def root():
         </body>
     </html>
     """
+
+
+if __name__ == "__main__":
+    hostname = socket.gethostname()
+    ip_address = socket.gethostbyname(hostname)
+    uvicorn.run(app=app, host=ip_address, port=6060)

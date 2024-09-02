@@ -33,6 +33,9 @@ except ImportError:
 from cosyvoice.utils.frontend_utils import contains_chinese, replace_blank, replace_corner_mark, remove_bracket, spell_out_number, split_paragraph
 
 
+from cosyvoice.utils.file_utils import logging
+
+
 class CosyVoiceFrontEnd:
 
     def __init__(self,
@@ -105,13 +108,16 @@ class CosyVoiceFrontEnd:
                 text = self.frd.get_frd_extra_info(text, 'input')
             else:
                 text = self.zh_tn_model.normalize(text)
+            logging.info('text {}'.format(text))
             text = text.replace("\n", "")
             text = replace_blank(text)
             text = replace_corner_mark(text)
             text = text.replace(".", "、")
             text = text.replace(" - ", "，")
+            text = text.replace("！", "，")  # 将文本中的破折号替换为中文逗号
+            text = text.replace("!", "，")  # 将文本中的破折号替换为中文逗号
             text = remove_bracket(text)
-            text = re.sub(r'[，,]+$', '。', text)
+            text = re.sub(r'[，,、]+$', '。', text)
             texts = [i for i in split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                                 token_min_n=60, merge_len=20,
                                                 comma_split=False)]

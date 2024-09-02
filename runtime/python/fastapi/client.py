@@ -10,6 +10,7 @@ def saveResponse(path, response):
 
 def main():
     api = args.api_base
+    logging.info('api: {}'.format(api.mode))
     if args.mode == 'sft':
         url = api + "/api/inference/sft"
         payload={
@@ -19,7 +20,7 @@ def main():
         response = requests.request("POST", url, data=payload)
         saveResponse(args.tts_wav, response)
     elif args.mode == 'zero_shot':
-        url = api + "/api/inference/zero-shot"
+        url = api + "/api/inference/app-zero-shot"
         payload={
             'tts': args.tts_text,
             'prompt': args.prompt_text

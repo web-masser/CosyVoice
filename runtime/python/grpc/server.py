@@ -42,8 +42,11 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
         elif request.HasField('zero_shot_request'):
             logging.info('get zero_shot inference request')
             prompt_speech_16k = torch.from_numpy(np.array(np.frombuffer(request.zero_shot_request.prompt_audio, dtype=np.int16))).unsqueeze(dim=0)
+            logging.info('speech1:  {}'.format(prompt_speech_16k))
             prompt_speech_16k = prompt_speech_16k.float() / (2**15)
+            logging.info('speech2:  {}'.format(prompt_speech_16k))
             model_output = self.cosyvoice.inference_zero_shot(request.zero_shot_request.tts_text, request.zero_shot_request.prompt_text, prompt_speech_16k)
+            logging.info('model_output:  {}'.format(model_output))
         elif request.HasField('cross_lingual_request'):
             logging.info('get cross_lingual inference request')
             prompt_speech_16k = torch.from_numpy(np.array(np.frombuffer(request.cross_lingual_request.prompt_audio, dtype=np.int16))).unsqueeze(dim=0)
