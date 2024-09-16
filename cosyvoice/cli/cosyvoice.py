@@ -93,15 +93,52 @@ class CosyVoice:
                 start_time = time.time()
 
     def inference_instruct(self, tts_text, spk_id, instruct_text, stream=False):
-        if self.frontend.instruct is False:
-            raise ValueError('{} do not support instruct inference'.format(self.model_dir))
+        """
+        执行指令推理。
+
+        该函数接受四个参数：要合成的文本、说话人ID、指令文本和是否流式输出。
+        它首先检查模型是否支持指令推理，如果不支持，则抛出异常。
+        然后，它对指令文本进行归一化处理，分割文本为子词并将其转换为整数。
+        接下来，它循环处理要合成的文本，准备模型的输入数据，调用模型进行推理，并输出结果。
+
+        参数：
+            tts_text (str): 要合成的文本。
+            spk_id (str): 说话人ID。
+            instruct_text (str): 指令文本。
+            stream (bool): 是否流式输出。
+
+        输出：
+            dict: 输出语音和其他信息。
+        """
+
+        # 检查模型是否支持指令推理
+        if not self.frontend.instruct:
+            raise ValueError('{} 不支持指令推理'.format(self.model_dir))
+
+        # 归一化指令文本
         instruct_text = self.frontend.text_normalize(instruct_text, split=False)
+
+        # 循环处理要合成的文本
         for i in self.frontend.text_normalize(tts_text, split=True):
+            # 准备模型的输入数据
             model_input = self.frontend.frontend_instruct(i, spk_id, instruct_text)
+
+            # 开始计时
             start_time = time.time()
-            logging.info('synthesis text4 {}'.format(i))
+
+            # 输出进度信息
+            logging.info('合成文本 {}'.format(i))
+
+            # 循环输出语音
             for model_output in self.model.inference(**model_input, stream=stream):
+                # 计算输出语音的长度
                 speech_len = model_output['tts_speech'].shape[1] / 22050
-                logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
+
+                # 输出进度信息
+                logging.info('输出语音长度 {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
+
+                # 输出语音
                 yield model_output
+
+                # 重置计时器
                 start_time = time.time()
