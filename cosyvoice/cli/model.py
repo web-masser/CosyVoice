@@ -43,7 +43,6 @@ class CosyVoiceModel:
         self.stream_scale_factor = 1
         assert self.stream_scale_factor >= 1, 'stream_scale_factor should be greater than 1, change it according to your actual rtf'
         self.llm_context = torch.cuda.stream(torch.cuda.Stream(self.device)) if torch.cuda.is_available() else nullcontext()
-        self.flow_hift_context = torch.cuda.stream(torch.cuda.Stream(self.device)) if torch.cuda.is_available() else nullcontext()
         self.lock = threading.Lock()
         # dict used to store session related variable
         self.tts_speech_token_dict = {}
@@ -60,54 +59,64 @@ class CosyVoiceModel:
         self.hift.load_state_dict(torch.load(hift_model, map_location=self.device))
         self.hift.to(self.device).eval()
 
-    def load_jit(self, llm_text_encoder_model, llm_llm_model):
+    def load_jit(self, llm_text_encoder_model, llm_llm_model, flow_encoder_model):
         llm_text_encoder = torch.jit.load(llm_text_encoder_model)
         self.llm.text_encoder = llm_text_encoder
         llm_llm = torch.jit.load(llm_llm_model)
         self.llm.llm = llm_llm
+        flow_encoder = torch.jit.load(flow_encoder_model)
+        self.flow.encoder = flow_encoder
+
+    def load_onnx(self, flow_decoder_estimator_model):
+        import onnxruntime
+        option = onnxruntime.SessionOptions()
+        option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+        option.intra_op_num_threads = 1
+        providers = ['CUDAExecutionProvider' if torch.cuda.is_available() else 'CPUExecutionProvider']
+        del self.flow.decoder.estimator
+        self.flow.decoder.estimator = onnxruntime.InferenceSession(flow_decoder_estimator_model, sess_options=option, providers=providers)
 
     def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
         with self.llm_context:
             for i in self.llm.inference(text=text.to(self.device),
-                                                text_len=torch.tensor([text.shape[1]], dtype=torch.int32).to(self.device),
-                                                prompt_text=prompt_text.to(self.device),
-                                                prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self.device),
-                                                prompt_speech_token=llm_prompt_speech_token.to(self.device),
-                                                prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self.device),
-                                                embedding=llm_embedding.to(self.device).half(),
-                                                sampling=25,
-                                                max_token_text_ratio=30,
-                                                min_token_text_ratio=3):
+                                        text_len=torch.tensor([text.shape[1]], dtype=torch.int32).to(self.device),
+                                        prompt_text=prompt_text.to(self.device),
+                                        prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self.device),
+                                        prompt_speech_token=llm_prompt_speech_token.to(self.device),
+                                        prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self.device),
+                                        embedding=llm_embedding.to(self.device).half(),
+                                        sampling=25,
+                                        max_token_text_ratio=30,
+                                        min_token_text_ratio=3):
                 self.tts_speech_token_dict[uuid].append(i)
         self.llm_end_dict[uuid] = True
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, uuid, finalize=False):
-        with self.flow_hift_context:
-            tts_mel = self.flow.inference(token=token.to(self.device),
-                                        token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(self.device),
-                                        prompt_token=prompt_token.to(self.device),
-                                        prompt_token_len=torch.tensor([prompt_token.shape[1]], dtype=torch.int32).to(self.device),
-                                        prompt_feat=prompt_feat.to(self.device),
-                                        prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(self.device),
-                                        embedding=embedding.to(self.device))
-            # mel overlap fade in out
-            if self.mel_overlap_dict[uuid] is not None:
-                tts_mel = fade_in_out(tts_mel, self.mel_overlap_dict[uuid], self.mel_window)
-            # append hift cache
-            if self.hift_cache_dict[uuid] is not None:
-                hift_cache_mel, hift_cache_source = self.hift_cache_dict[uuid]['mel'], self.hift_cache_dict[uuid]['source']
-                tts_mel = torch.concat([hift_cache_mel, tts_mel], dim=2)
-            else:
-                hift_cache_source = torch.zeros(1, 1, 0)
-            # keep overlap mel and hift cache
-            if finalize is False:
-                self.mel_overlap_dict[uuid] = tts_mel[:, :, -self.mel_overlap_len:]
-                tts_mel = tts_mel[:, :, :-self.mel_overlap_len]
-                tts_speech, tts_source = self.hift.inference(mel=tts_mel, cache_source=hift_cache_source)
-                self.hift_cache_dict[uuid] = {'source': tts_source[:, :, -self.source_cache_len:], 'mel': tts_mel[:, :, -self.mel_cache_len:]}
-                tts_speech = tts_speech[:, :-self.source_cache_len]
-            else:
-                tts_speech, tts_source = self.hift.inference(mel=tts_mel, cache_source=hift_cache_source)
+        tts_mel = self.flow.inference(token=token.to(self.device),
+                                      token_len=torch.tensor([token.shape[1]], dtype=torch.int32).to(self.device),
+                                      prompt_token=prompt_token.to(self.device),
+                                      prompt_token_len=torch.tensor([prompt_token.shape[1]], dtype=torch.int32).to(self.device),
+                                      prompt_feat=prompt_feat.to(self.device),
+                                      prompt_feat_len=torch.tensor([prompt_feat.shape[1]], dtype=torch.int32).to(self.device),
+                                      embedding=embedding.to(self.device))
+        # mel overlap fade in out
+        if self.mel_overlap_dict[uuid] is not None:
+            tts_mel = fade_in_out(tts_mel, self.mel_overlap_dict[uuid], self.mel_window)
+        # append hift cache
+        if self.hift_cache_dict[uuid] is not None:
+            hift_cache_mel, hift_cache_source = self.hift_cache_dict[uuid]['mel'], self.hift_cache_dict[uuid]['source']
+            tts_mel = torch.concat([hift_cache_mel, tts_mel], dim=2)
+        else:
+            hift_cache_source = torch.zeros(1, 1, 0)
+        # keep overlap mel and hift cache
+        if finalize is False:
+            self.mel_overlap_dict[uuid] = tts_mel[:, :, -self.mel_overlap_len:]
+            tts_mel = tts_mel[:, :, :-self.mel_overlap_len]
+            tts_speech, tts_source = self.hift.inference(mel=tts_mel, cache_source=hift_cache_source)
+            self.hift_cache_dict[uuid] = {'source': tts_source[:, :, -self.source_cache_len:], 'mel': tts_mel[:, :, -self.mel_cache_len:]}
+            tts_speech = tts_speech[:, :-self.source_cache_len]
+        else:
+            tts_speech, tts_source = self.hift.inference(mel=tts_mel, cache_source=hift_cache_source)
         return tts_speech
 
     def inference(self, text, flow_embedding, llm_embedding=torch.zeros(0, 192),
@@ -136,9 +145,8 @@ class CosyVoiceModel:
 
         # 初始化此推理线程的变量
         with self.lock:
-            self.tts_speech_token_dict[this_uuid], self.llm_end_dict[this_uuid], self.mel_overlap_dict[this_uuid], self.hift_cache_dict[this_uuid] = [], False, None, None
-
-        # 启动语言模型任务
+            self.tts_speech_token_dict[this_uuid], self.llm_end_dict[this_uuid] = [], False
+            self.mel_overlap_dict[this_uuid], self.hift_cache_dict[this_uuid] = None, None
         p = threading.Thread(target=self.llm_job, args=(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
         p.start()
 
@@ -154,23 +162,13 @@ class CosyVoiceModel:
                 if len(self.tts_speech_token_dict[this_uuid]) >= token_hop_len + self.token_overlap_len:
                     # 获取下一个语音块的token
                     this_tts_speech_token = torch.concat(self.tts_speech_token_dict[this_uuid][:token_hop_len + self.token_overlap_len], dim=1)
-
-                    # 使用流式模型生成语音
-                    with self.flow_hift_context:
-                        this_tts_speech = self.token2wav(token=this_tts_speech_token,
-                                                        prompt_token=flow_prompt_speech_token,
-                                                        prompt_feat=prompt_speech_feat,
-                                                        embedding=flow_embedding,
-                                                        uuid=this_uuid,
-                                                        finalize=False)
-
-                    # 生成语音
+                    this_tts_speech = self.token2wav(token=this_tts_speech_token,
+                                                     prompt_token=flow_prompt_speech_token,
+                                                     prompt_feat=prompt_speech_feat,
+                                                     embedding=flow_embedding,
+                                                     uuid=this_uuid,
+                                                     finalize=False)
                     yield {'tts_speech': this_tts_speech.cpu()}
-
-                    # 更新token_hop_len
-                    token_hop_len = min(self.token_max_hop_len, int(token_hop_len * self.stream_scale_factor))
-
-                    # 更新当前token
                     with self.lock:
                         self.tts_speech_token_dict[this_uuid] = self.tts_speech_token_dict[this_uuid][token_hop_len:]
 
@@ -183,15 +181,12 @@ class CosyVoiceModel:
 
             # 生成最后一个语音块
             this_tts_speech_token = torch.concat(self.tts_speech_token_dict[this_uuid], dim=1)
-            with self.flow_hift_context:
-                this_tts_speech = self.token2wav(token=this_tts_speech_token,
-                                                prompt_token=flow_prompt_speech_token,
-                                                prompt_feat=prompt_speech_feat,
-                                                embedding=flow_embedding,
-                                                uuid=this_uuid,
-                                                finalize=True)
-
-            # 生成语音
+            this_tts_speech = self.token2wav(token=this_tts_speech_token,
+                                             prompt_token=flow_prompt_speech_token,
+                                             prompt_feat=prompt_speech_feat,
+                                             embedding=flow_embedding,
+                                             uuid=this_uuid,
+                                             finalize=True)
             yield {'tts_speech': this_tts_speech.cpu()}
         else:
             # 等待语言模型任务完成
@@ -199,15 +194,12 @@ class CosyVoiceModel:
 
             # 使用流式模型生成语音
             this_tts_speech_token = torch.concat(self.tts_speech_token_dict[this_uuid], dim=1)
-            with self.flow_hift_context:
-                this_tts_speech = self.token2wav(token=this_tts_speech_token,
-                                                prompt_token=flow_prompt_speech_token,
-                                                prompt_feat=prompt_speech_feat,
-                                                embedding=flow_embedding,
-                                                uuid=this_uuid,
-                                                finalize=True)
-
-            # 生成语音
+            this_tts_speech = self.token2wav(token=this_tts_speech_token,
+                                             prompt_token=flow_prompt_speech_token,
+                                             prompt_feat=prompt_speech_feat,
+                                             embedding=flow_embedding,
+                                             uuid=this_uuid,
+                                             finalize=True)
             yield {'tts_speech': this_tts_speech.cpu()}
 
         # 清理此推理线程的变量
@@ -216,6 +208,3 @@ class CosyVoiceModel:
             self.llm_end_dict.pop(this_uuid)
             self.mel_overlap_dict.pop(this_uuid)
             self.hift_cache_dict.pop(this_uuid)
-
-        # 同步GPU
-        torch.cuda.synchronize()
