@@ -11,7 +11,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import asyncio
 from io import BytesIO
 import io
 import os
@@ -98,34 +97,24 @@ def generate_data2(model_output, file_path):
             os.remove(file_path)
         # 保存到文件
         os.rename(temp_file_path, file_path)
-        yield tts_audio
-
+        yield tts_audio        
+        
 @app.post("/app-zero-output")
 async def inference_zero_shot(input: dict):
     prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
     file_path = f"./output_data/{input['user_id']}_single.wav"
     if os.path.exists(file_path):
             os.remove(file_path)
-    model_output = cosyvoice.inference_zero_shot(input["tts_text"], input["prompt_text"], prompt_speech_16k, stream=True)
-    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
-    
+    model_output = cosyvoice.inference_zero_shot(input["tts_text"], input["prompt_text"], prompt_speech_16k, stream=True, speed=input["speed"])
+    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")    
+
 @app.get("/audio/{type}/{user_id}")
 async def get_audio(user_id: str, type: str):
-    # 定义音频文件路径
     file_path = f"./output_data/{user_id}_{type}.wav"
-    # 检查文件是否存在
     if os.path.exists(file_path):
         return FileResponse(file_path)
     else:
         return {"error": "File not found"}
-
-
-@app.post("/inference_zero_shot")
-async def inference_zero_shot(input: dict):
-    prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
-    model_output = cosyvoice.inference_zero_shot(input["tts_text"], input["prompt_text"], prompt_speech_16k, stream=True)
-    return StreamingResponse(generate_data2(model_output), media_type="text/plain")  
-
 
 @app.get("/inference_cross_lingual")
 async def inference_cross_lingual(tts_text: str = Form(), prompt_wav: UploadFile = File()):
