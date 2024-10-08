@@ -55,6 +55,8 @@ class CosyVoiceFrontEnd:
                                                                                 "CPUExecutionProvider"])
         if os.path.exists(spk2info):
             self.spk2info = torch.load(spk2info, map_location=self.device)
+        else:
+            self.spk2info = {}
         self.instruct = instruct
         self.allowed_special = allowed_special
         self.inflect_parser = inflect.engine()
@@ -116,13 +118,10 @@ class CosyVoiceFrontEnd:
             text = text.replace("\n", "")
             text = replace_blank(text)
             text = replace_corner_mark(text)
-            text = text.replace(".", "、")
+            text = text.replace(".", "。")
             text = text.replace(" - ", "，")
             text = remove_bracket(text)
-            text = re.sub(r'[，,]+$', '。', text)
-            if not text.endswith(('。', ',', '，', '、', '.', '?', '!')):
-                text = text + '。'
-            
+            text = re.sub(r'[，,、]+$', '。', text)
             texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                          token_min_n=60, merge_len=20, comma_split=False))
         else:
@@ -175,4 +174,16 @@ class CosyVoiceFrontEnd:
         instruct_text_token, instruct_text_token_len = self._extract_text_token(instruct_text + '<endofprompt>')
         model_input['prompt_text'] = instruct_text_token
         model_input['prompt_text_len'] = instruct_text_token_len
+        return model_input
+
+    def frontend_vc(self, source_speech_16k, prompt_speech_16k):
+        prompt_speech_token, prompt_speech_token_len = self._extract_speech_token(prompt_speech_16k)
+        prompt_speech_22050 = torchaudio.transforms.Resample(orig_freq=16000, new_freq=22050)(prompt_speech_16k)
+        prompt_speech_feat, prompt_speech_feat_len = self._extract_speech_feat(prompt_speech_22050)
+        embedding = self._extract_spk_embedding(prompt_speech_16k)
+        source_speech_token, source_speech_token_len = self._extract_speech_token(source_speech_16k)
+        model_input = {'source_speech_token': source_speech_token, 'source_speech_token_len': source_speech_token_len,
+                       'flow_prompt_speech_token': prompt_speech_token, 'flow_prompt_speech_token_len': prompt_speech_token_len,
+                       'prompt_speech_feat': prompt_speech_feat, 'prompt_speech_feat_len': prompt_speech_feat_len,
+                       'flow_embedding': embedding}
         return model_input
