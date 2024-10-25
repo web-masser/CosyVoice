@@ -2,11 +2,11 @@
 # Copyright 2024 Alibaba Inc. All Rights Reserved.
 . ./path.sh || exit 1;
 
-stage=-1
+stage=0
 stop_stage=3
 
 data_url=www.openslr.org/resources/60
-data_dir=/mnt/lyuxiang.lx/data/tts/openslr/libritts
+data_dir=D:/project/CosyVoice/examples/libritts/cosyvoice/libritts
 pretrained_model_dir=../../../pretrained_models/CosyVoice-300M
 
 if [ ${stage} -le -1 ] && [ ${stop_stage} -ge -1 ]; then
@@ -27,7 +27,7 @@ fi
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   echo "Extract campplus speaker embedding, you will get spk2embedding.pt and utt2embedding.pt in data/$x dir"
   for x in train-clean-100 train-clean-360 train-other-500 dev-clean dev-other test-clean test-other; do
-    tools/extract_embedding.py --dir data/$x \
+    ../../../tools/extract_embedding.py --dir data/$x \
       --onnx_path $pretrained_model_dir/campplus.onnx
   done
 fi
@@ -35,7 +35,7 @@ fi
 if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
   echo "Extract discrete speech token, you will get utt2speech_token.pt in data/$x dir"
   for x in train-clean-100 train-clean-360 train-other-500 dev-clean dev-other test-clean test-other; do
-    tools/extract_speech_token.py --dir data/$x \
+    ../../../tools/extract_speech_token.py --dir data/$x \
       --onnx_path $pretrained_model_dir/speech_tokenizer_v1.onnx
   done
 fi
@@ -44,7 +44,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
   echo "Prepare required parquet format data, you should have prepared wav.scp/text/utt2spk/spk2utt/utt2embedding.pt/spk2embedding.pt/utt2speech_token.pt"
   for x in train-clean-100 train-clean-360 train-other-500 dev-clean dev-other test-clean test-other; do
     mkdir -p data/$x/parquet
-    tools/make_parquet_list.py --num_utts_per_parquet 1000 \
+    ../../../tools/make_parquet_list.py --num_utts_per_parquet 1000 \
       --num_processes 10 \
       --src_dir data/$x \
       --des_dir data/$x/parquet

@@ -22,6 +22,7 @@ import torchaudio
 import os
 import re
 import inflect
+import logging
 try:
     import ttsfrd
     use_ttsfrd = True
@@ -55,6 +56,8 @@ class CosyVoiceFrontEnd:
                                                                                 "CPUExecutionProvider"])
         if os.path.exists(spk2info):
             self.spk2info = torch.load(spk2info, map_location=self.device)
+            logging.info('load spk2info from {}'.format(spk2info))
+            logging.info(self.spk2info)
         else:
             self.spk2info = {}
         self.instruct = instruct
@@ -122,6 +125,9 @@ class CosyVoiceFrontEnd:
             text = text.replace(" - ", "，")
             text = remove_bracket(text)
             text = re.sub(r'[，,、]+$', '。', text)
+            if not text.endswith(('。', ',', '，', '、', '.', '?', '!')):
+                text = text + '。'
+            
             texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                          token_min_n=60, merge_len=20, comma_split=False))
         else:
@@ -139,6 +145,7 @@ class CosyVoiceFrontEnd:
 
     def frontend_sft(self, tts_text, spk_id):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
+        logging.info(self.spk2info, 'spk2info')
         embedding = self.spk2info[spk_id]['embedding']
         model_input = {'text': tts_text_token, 'text_len': tts_text_token_len, 'llm_embedding': embedding, 'flow_embedding': embedding}
         return model_input

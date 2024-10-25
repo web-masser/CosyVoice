@@ -25,16 +25,24 @@ import aioredis
 from aioredis import Redis
 from typing import Dict
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-from fastapi import FastAPI, UploadFile, Form, File, WebSocket, BackgroundTasks
+from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import numpy as np
+
+from modelscope.pipelines import pipeline
+from modelscope.utils.constant import Tasks
+
+
+
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 sys.path.append('{}/../../..'.format(ROOT_DIR))
 sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.cli.cosyvoice import CosyVoice
 from cosyvoice.utils.file_utils import load_wav
+from cosyvoice.utils.common import set_all_random_seed
 
 app = FastAPI()
 
@@ -51,6 +59,8 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     out, _ = (
         ffmpeg
         .input('pipe:0')
+        .filter('volume', '10dB')
+        .filter('atrim', duration=28)  # 只保留前30秒
         .output('pipe:1', ar='16000', ac='1', format='wav')
         .run(input=input_audio.read(), capture_stdout=True, capture_stderr=True)
     )
@@ -59,15 +69,13 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
 @app.on_event("startup")
 async def startup_event():
     global cosyvoice
-    cosyvoice = CosyVoice('iic/CosyVoice-300M')
-    global redis
-    redis = aioredis.from_url("redis://localhost")
+    cosyvoice = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M')
     
-@app.on_event("shutdown")
-async def shutdown():
-    # 在应用关闭时执行的代码
-    print("Closing Redis connection...")
-    await redis.close()
+    global cosyvoice_instruct
+    # cosyvoice_instruct = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M-Instruct')
+    
+    # global redis
+    # redis = aioredis.from_url("redis://localhost")
 
 @app.post("/inference/app-zero-save")
 async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)):
@@ -75,7 +83,8 @@ async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)
     converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))
     with io.BytesIO(converted_audio) as f:
         prompt_speech_16k = load_wav(f, 16000)
-        torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt")       
+    torchaudio.save(f"./py_data/{fileName}.wav", prompt_speech_16k, 16000, format="wav")
+    torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt")       
     return True
         
 
@@ -101,12 +110,13 @@ def generate_data2(model_output, file_path):
         
 @app.post("/app-zero-output")
 async def inference_zero_shot(input: dict):
+    set_all_random_seed(int(input["seed"]))
     prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
     file_path = f"./output_data/{input['user_id']}_single.wav"
     if os.path.exists(file_path):
             os.remove(file_path)
-    model_output = cosyvoice.inference_zero_shot(input["tts_text"], input["prompt_text"], prompt_speech_16k, stream=True, speed=input["speed"])
-    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")    
+    model_output = cosyvoice.inference_zero_shot(input["tts_text"], input["prompt_text"], prompt_speech_16k, stream=input["stream"], speed=input["speed"])
+    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
 
 @app.get("/audio/{type}/{user_id}")
 async def get_audio(user_id: str, type: str):
@@ -115,20 +125,38 @@ async def get_audio(user_id: str, type: str):
         return FileResponse(file_path)
     else:
         return {"error": "File not found"}
+    
+@app.post("/inference_cross_lingual")
+async def inference_cross_lingual(input: dict):
+    set_all_random_seed(int(input["seed"]))
+    prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
+    file_path = f"./output_data/{input['user_id']}_single.wav"
+    if os.path.exists(file_path):
+            os.remove(file_path)
+    model_output = cosyvoice.inference_cross_lingual(input["tts_text"], prompt_speech_16k, stream=input["stream"], speed=input["speed"])
+    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
+    
+@app.post("/translate")
+async def inference_cross_lingual(input: dict):
+    input_sequence = input['text']
+    pipeline_ins = pipeline(task=Tasks.translation, model="damo/nlp_csanmt_translation_zh2en")
+    outputs = pipeline_ins(input=input_sequence)
+    return outputs
 
-@app.get("/inference_cross_lingual")
-async def inference_cross_lingual(tts_text: str = Form(), prompt_wav: UploadFile = File()):
-    prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-    model_output = cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k)
-    return StreamingResponse(generate_data2(model_output))
-
-
-@app.get("/inference_instruct")
-async def inference_instruct(tts_text: str = Form(), spk_id: str = Form(), instruct_text: str = Form()):
-    model_output = cosyvoice.inference_instruct(tts_text, spk_id, instruct_text)
-    return StreamingResponse(generate_data2(model_output))
+@app.post("/inference_instruct")
+async def inference_instruct(input: dict):
+    set_all_random_seed(int(input["seed"]))
+    file_path = f"./output_data/{input['user_id']}_single.wav"
+    if os.path.exists(file_path):
+            os.remove(file_path)
+    logging.info(input["natural_text"])
+    if input["natural_text"].endswith(('。', ',', '，', '、', '.', '?', '!')):
+        input["natural_text"] = input["natural_text"][:-1]
+    
+    model_output = cosyvoice_instruct.inference_instruct(input["tts_text"], input["speak"], input["natural_text"],stream=input["stream"], speed=input["speed"])
+    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
 
 
 if __name__ == '__main__':
-    # uvicorn.run(app="server:app", host="192.168.66.108", port=6070, workers=2)
-    uvicorn.run(app=app, host="192.168.66.108", port=6070)
+    # uvicorn.run(app="server:app", host="127.0.0.1", port=6070, workers=2)
+    uvicorn.run(app=app, host="127.0.0.1", port=6712)
