@@ -41,6 +41,8 @@ tensorboard
 .cache
 compile_commands.json
 
+runtime/python/fastapi/dataset/*
+
 # train/inference files
 *.wav
 *.m4a

@@ -134,7 +134,7 @@ async def inference_cross_lingual(input: dict):
     if os.path.exists(file_path):
             os.remove(file_path)
     model_output = cosyvoice.inference_cross_lingual(input["tts_text"], prompt_speech_16k, stream=input["stream"], speed=input["speed"])
-    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
+    return StreamingResponse(generate_data2(model_output, file_path ), media_type="audio/wav")
     
 @app.post("/translate")
 async def inference_cross_lingual(input: dict):
