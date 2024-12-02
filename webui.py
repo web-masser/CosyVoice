@@ -20,6 +20,7 @@ import torch
 import torchaudio
 import random
 import librosa
+import time
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append('{}/third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.cli.cosyvoice import CosyVoice
@@ -107,7 +108,7 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
     # if cross_lingual mode, please make sure that model is iic/CosyVoice-300M and tts_text prompt_text are different language
     if mode_checkbox_group in ['跨语种复刻']:
         if cosyvoice.frontend.instruct is True:
-            gr.Warning('您正在使用跨语种复刻模式, {}模型不支持此模式, 请使用iic/CosyVoice-300M模型'.format(args.model_dir))
+            gr.Warning('您正在使用跨语种复刻模式, {}模型不支持此模式, ���使用iic/CosyVoice-300M模型'.format(args.model_dir))
             yield (target_sr, default_data)
         if instruct_text != '':
             gr.Info('您正在使用跨语种复刻模式, instruct文本会被忽略')
@@ -165,14 +166,23 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
         logging.info('get cross_lingual inference request')
         prompt_speech_16k = postprocess(load_wav(prompt_wav, prompt_sr))
         set_all_random_seed(seed)
+        merged_audio = []
         for i in cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k, stream=stream, speed=speed):
             audio = i['tts_speech'].numpy().flatten()
+            merged_audio.append(audio)
             audio_list.append({
                 'data': audio,
                 'text': tts_text,
                 'mode': mode_checkbox_group
             })
             yield (target_sr, audio), format_audio_list(audio_list)
+        # 合并音频片段并保存
+        if merged_audio:
+            total_audio = np.concatenate(merged_audio)
+            timestamp = int(time.time())
+            output_path = os.path.join(ROOT_DIR, "output", f"{timestamp}.wav")
+            torchaudio.save(output_path, torch.tensor(total_audio).unsqueeze(0), target_sr)
+            logging.info(f'已将合并后的音频保存至 {output_path}')
     else:
         logging.info('get instruct inference request')
         set_all_random_seed(seed)
@@ -247,7 +257,7 @@ def main():
             outputs=[audio_output, audio_gallery]
         )
         
-        # 删除音频
+        # 删���音频
         audio_gallery.select(
             delete_audio,
             inputs=[audio_list, gr.Textbox()],  # Textbox用于接收选中的索引
