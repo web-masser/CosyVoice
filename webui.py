@@ -19,8 +19,9 @@ import numpy as np
 import torch
 import torchaudio
 import random
-import librosa
 import time
+import librosa
+import gc   
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append('{}/third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.cli.cosyvoice import CosyVoice
@@ -60,35 +61,8 @@ def change_instruction(mode_checkbox_group):
     return instruct_dict[mode_checkbox_group]
 
 
-def delete_audio(audio_list, index):
-    try:
-        index = int(index)
-        if 0 <= index < len(audio_list):
-            audio_list.pop(index)
-    except (ValueError, TypeError):
-        pass
-    return format_audio_list(audio_list)
-
-
-def merge_audios(audio_list):
-    if not audio_list:
-        gr.Warning("没有可合并的音频！")
-        return None
-    
-    combined_audio = np.concatenate([audio['data'] for audio in audio_list])
-    output_path = "merged_output.wav"
-    torchaudio.save(output_path, torch.tensor(combined_audio).unsqueeze(0), target_sr)
-    gr.Info(f'已将合并后的音频保存至 {output_path}')
-    return (target_sr, combined_audio)
-
-
-def format_audio_list(audio_list):
-    """将音频列表转换为适合 Dataframe 显示的格式"""
-    return [[i, item['text'], item['mode']] for i, item in enumerate(audio_list)]
-
-
 def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, prompt_wav_upload, prompt_wav_record, instruct_text,
-                   seed, stream, speed, audio_list):
+                   seed, stream, speed):
     if prompt_wav_upload is not None:
         prompt_wav = prompt_wav_upload
     elif prompt_wav_record is not None:
@@ -108,7 +82,7 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
     # if cross_lingual mode, please make sure that model is iic/CosyVoice-300M and tts_text prompt_text are different language
     if mode_checkbox_group in ['跨语种复刻']:
         if cosyvoice.frontend.instruct is True:
-            gr.Warning('您正在使用跨语种复刻模式, {}模型不支持此模式, ���使用iic/CosyVoice-300M模型'.format(args.model_dir))
+            gr.Warning('您正在使用跨语种复刻模式, {}模型不支持此模式, 请使用iic/CosyVoice-300M模型'.format(args.model_dir))
             yield (target_sr, default_data)
         if instruct_text != '':
             gr.Info('您正在使用跨语种复刻模式, instruct文本会被忽略')
@@ -140,60 +114,49 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
         logging.info('get sft inference request')
         set_all_random_seed(seed)
         for i in cosyvoice.inference_sft(tts_text, sft_dropdown, stream=stream, speed=speed):
-            audio = i['tts_speech'].numpy().flatten()
-            audio_list.append({
-                'data': audio,
-                'text': tts_text,
-                'mode': mode_checkbox_group
-            })
-            yield (target_sr, audio), format_audio_list(audio_list)
+            yield (target_sr, i['tts_speech'].numpy().flatten())
     elif mode_checkbox_group == '3s极速复刻':
         logging.info('get zero_shot inference request')
         prompt_speech_16k = postprocess(load_wav(prompt_wav, prompt_sr))
-        file_name = f"./test.pt"
-        torch.save(prompt_speech_16k, file_name)
-        logging.info('speech1:  {}'.format(prompt_speech_16k))
         set_all_random_seed(seed)
         for i in cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k, stream=stream, speed=speed):
-            audio = i['tts_speech'].numpy().flatten()
-            audio_list.append({
-                'data': audio,
-                'text': tts_text,
-                'mode': mode_checkbox_group
-            })
-            yield (target_sr, audio), format_audio_list(audio_list)
+            yield (target_sr, i['tts_speech'].numpy().flatten())
     elif mode_checkbox_group == '跨语种复刻':
         logging.info('get cross_lingual inference request')
         prompt_speech_16k = postprocess(load_wav(prompt_wav, prompt_sr))
         set_all_random_seed(seed)
-        merged_audio = []
+        audio_chunks = []
         for i in cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k, stream=stream, speed=speed):
-            audio = i['tts_speech'].numpy().flatten()
-            merged_audio.append(audio)
-            audio_list.append({
-                'data': audio,
-                'text': tts_text,
-                'mode': mode_checkbox_group
-            })
-            yield (target_sr, audio), format_audio_list(audio_list)
-        # 合并音频片段并保存
-        if merged_audio:
-            total_audio = np.concatenate(merged_audio)
-            timestamp = int(time.time())
-            output_path = os.path.join(ROOT_DIR, "output", f"{timestamp}.wav")
-            torchaudio.save(output_path, torch.tensor(total_audio).unsqueeze(0), target_sr)
-            logging.info(f'已将合并后的音频保存至 {output_path}')
+            audio_chunk = i['tts_speech'].numpy().flatten()
+            audio_chunks.append(audio_chunk)
+            yield (target_sr, audio_chunk)
+            torch.cuda.empty_cache()
+            gc.collect()
+        
+        # 合并所有音频片段
+        merged_audio = np.concatenate(audio_chunks)
+        
+        # 确保输出目录存在
+        output_dir = os.path.join(ROOT_DIR, 'output')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 生成时间戳作为文件名
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        output_filename = f'merged_audio_{timestamp}.wav'
+        
+        # 定义输出文件路径
+        output_path = os.path.join(output_dir, output_filename)
+        
+        # 保存合并后的音频
+        torchaudio.save(output_path, torch.tensor(merged_audio).unsqueeze(0), target_sr)
+        
+        logging.info(f'合并后的音频已保存至 {output_path}')
     else:
         logging.info('get instruct inference request')
         set_all_random_seed(seed)
         for i in cosyvoice.inference_instruct(tts_text, sft_dropdown, instruct_text, stream=stream, speed=speed):
-            audio = i['tts_speech'].numpy().flatten()
-            audio_list.append({
-                'data': audio,
-                'text': tts_text,
-                'mode': mode_checkbox_group
-            })
-            yield (target_sr, audio), format_audio_list(audio_list)
+            yield (target_sr, i['tts_speech'].numpy().flatten())
+            
 
 
 def main():
@@ -223,61 +186,13 @@ def main():
 
         generate_button = gr.Button("生成音频")
 
-        # 存储生成的音频列表
-        audio_list = gr.State([])
-        
-        # 音频输出和音频列表展示区域
-        with gr.Row():
-            # 左侧音频输出
-            with gr.Column(scale=1):
-                audio_output = gr.Audio(label="当前生成音频", autoplay=True, streaming=True)
-            
-            # 右侧音频列表
-            with gr.Column(scale=1):
-                with gr.Row():
-                    merge_button = gr.Button("合并音频")
-                    clear_button = gr.Button("清空列表")
-                
-                # 修改音频列表的展示方式
-                audio_gallery = gr.Dataframe(
-                    headers=["序号", "文本内容", "生成模式"],
-                    type="array",
-                    interactive=True,
-                    wrap=True
-                )
-                
-                merged_audio = gr.Audio(label="合并后的音频")
+        audio_output = gr.Audio(label="合成音频", autoplay=True, streaming=True)
 
         seed_button.click(generate_seed, inputs=[], outputs=seed)
-        generate_button.click(
-            generate_audio,
-            inputs=[tts_text, mode_checkbox_group, sft_dropdown, prompt_text, 
-                   prompt_wav_upload, prompt_wav_record, instruct_text,
-                   seed, stream, speed, audio_list],
-            outputs=[audio_output, audio_gallery]
-        )
-        
-        # 删���音频
-        audio_gallery.select(
-            delete_audio,
-            inputs=[audio_list, gr.Textbox()],  # Textbox用于接收选中的索引
-            outputs=[audio_gallery]
-        )
-        
-        # 合并音频
-        merge_button.click(
-            merge_audios,
-            inputs=[audio_list],
-            outputs=[merged_audio]
-        )
-        
-        # 清空列表
-        clear_button.click(
-            lambda: [],
-            inputs=[],
-            outputs=[audio_gallery]
-        )
-
+        generate_button.click(generate_audio,
+                              inputs=[tts_text, mode_checkbox_group, sft_dropdown, prompt_text, prompt_wav_upload, prompt_wav_record, instruct_text,
+                                      seed, stream, speed],
+                              outputs=[audio_output])
         mode_checkbox_group.change(fn=change_instruction, inputs=[mode_checkbox_group], outputs=[instruction_text])
     demo.queue(max_size=4, default_concurrency_limit=2)
     demo.launch(server_name='0.0.0.0', server_port=args.port)

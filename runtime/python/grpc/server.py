@@ -39,7 +39,7 @@ class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def Inference(self, request, context):
         if request.HasField('sft_request'):
             logging.info('get sft inference request')
-            model_output = self.cosyvoice.inference_sft(request.sft_request.tts_text, request.sft_request.spk_id)
+            model_output = self.cosyvoice.inference_sft(request.sft_request.tts_text, request.sft_request.spk_id, stream=True)
         elif request.HasField('zero_shot_request'):
             logging.info('get zero_shot inference request')
             prompt_speech_16k = torch.from_numpy(np.array(np.frombuffer(request.zero_shot_request.prompt_audio, dtype=np.int16))).unsqueeze(dim=0)
