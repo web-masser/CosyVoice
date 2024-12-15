@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from contextlib import asynccontextmanager
 from io import BytesIO
 import io
 import os
@@ -30,9 +31,11 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
-from modelscope.pipelines import pipeline
-from modelscope.utils.constant import Tasks
+# from modelscope.pipelines import pipeline
+# from modelscope.utils.constant import Tasks
 
 
 
@@ -40,11 +43,33 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.append('{}/../../..'.format(ROOT_DIR))
 sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
-from cosyvoice.cli.cosyvoice import CosyVoice
 from cosyvoice.utils.file_utils import load_wav
 from cosyvoice.utils.common import set_all_random_seed
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 获取当前进程的ID，用于确定使用哪个GPU
+    worker_id = os.getpid() % 2  # 使用进程ID模2来分配GPU
+    
+    # 设置当前进程使用的GPU
+    device = f'cuda:{worker_id}'
+    torch.cuda.set_device(device)
+    print(f"Worker {os.getpid()} using {device}")
+    
+    # 启动时执行
+    from cosyvoice.cli.cosyvoice import CosyVoice
+    global cosyvoice
+    cosyvoice = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M', True, True)
+    
+    app.state.thread_pool = ThreadPoolExecutor(max_workers=4)
+    
+    yield
+    
+    # 关闭时执行
+    # 清理代码
+    app.state.thread_pool.shutdown()
+
+app = FastAPI(lifespan=lifespan)
 
 # set cross region allowance
 app.add_middleware(
@@ -65,17 +90,6 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
         .run(input=input_audio.read(), capture_stdout=True, capture_stderr=True)
     )
     return out
-
-@app.on_event("startup")
-async def startup_event():
-    global cosyvoice
-    cosyvoice = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M')
-    
-    global cosyvoice_instruct
-    # cosyvoice_instruct = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M-Instruct')
-    
-    # global redis
-    # redis = aioredis.from_url("redis://localhost")
 
 @app.post("/inference/app-zero-save")
 async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)):
@@ -136,12 +150,12 @@ async def inference_cross_lingual(input: dict):
     model_output = cosyvoice.inference_cross_lingual(input["tts_text"], prompt_speech_16k, stream=input["stream"], speed=input["speed"])
     return StreamingResponse(generate_data2(model_output, file_path ), media_type="audio/wav")
     
-@app.post("/translate")
-async def inference_cross_lingual(input: dict):
-    input_sequence = input['text']
-    pipeline_ins = pipeline(task=Tasks.translation, model="damo/nlp_csanmt_translation_zh2en")
-    outputs = pipeline_ins(input=input_sequence)
-    return outputs
+# @app.post("/translate")
+# async def inference_cross_lingual(input: dict):
+#     input_sequence = input['text']
+#     pipeline_ins = pipeline(task=Tasks.translation, model="damo/nlp_csanmt_translation_zh2en")
+#     outputs = pipeline_ins(input=input_sequence)
+#     return outputs
 
 @app.post("/inference_instruct")
 async def inference_instruct(input: dict):
@@ -158,5 +172,5 @@ async def inference_instruct(input: dict):
 
 
 if __name__ == '__main__':
-    # uvicorn.run(app="server:app", host="127.0.0.1", port=6070, workers=2)
-    uvicorn.run(app=app, host="127.0.0.1", port=6712)
+    uvicorn.run(app="server:app", host="127.0.0.1", port=6070, workers=2)
+    # uvicorn.run(app=app, host="127.0.0.1", port=6712)

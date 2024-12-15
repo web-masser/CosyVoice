@@ -56,8 +56,6 @@ class CosyVoiceFrontEnd:
                                                                                 "CPUExecutionProvider"])
         if os.path.exists(spk2info):
             self.spk2info = torch.load(spk2info, map_location=self.device)
-            logging.info('load spk2info from {}'.format(spk2info))
-            logging.info(self.spk2info)
         else:
             self.spk2info = {}
         self.instruct = instruct
@@ -145,7 +143,6 @@ class CosyVoiceFrontEnd:
 
     def frontend_sft(self, tts_text, spk_id):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
-        logging.info(self.spk2info, 'spk2info')
         embedding = self.spk2info[spk_id]['embedding']
         model_input = {'text': tts_text_token, 'text_len': tts_text_token_len, 'llm_embedding': embedding, 'flow_embedding': embedding}
         return model_input

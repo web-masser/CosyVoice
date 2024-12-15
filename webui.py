@@ -28,6 +28,26 @@ from cosyvoice.cli.cosyvoice import CosyVoice
 from cosyvoice.utils.file_utils import load_wav, logging
 from cosyvoice.utils.common import set_all_random_seed
 
+
+# 检查CUDA是否可用
+print("CUDA 是否可用:", torch.cuda.is_available())
+
+# 查看当前 PyTorch 使用的 CUDA 版本
+print("PyTorch CUDA 版本:", torch.version.cuda)
+
+# 查看可用的 GPU 数量
+print("可用 GPU 数量:", torch.cuda.device_count())
+
+# 查看当前 GPU 设备名称
+if torch.cuda.is_available():
+    print("当前 GPU 设备:", torch.cuda.get_device_name(0))
+
+# 简单的 CUDA 运算测试
+if torch.cuda.is_available():
+    # 创建一个张量并移至 GPU
+    x = torch.tensor([1., 2.]).cuda()
+    print("测试张量在 GPU 上:", x)
+
 inference_mode_list = ['预训练音色', '3s极速复刻', '跨语种复刻', '自然语言控制']
 instruct_dict = {'预训练音色': '1. 选择预训练音色\n2. 点击生成音频按钮',
                  '3s极速复刻': '1. 选择prompt音频文件，或录入prompt音频，注意不超过30s，若同时提供，优先选择prompt音频文件\n2. 输入prompt文本\n3. 点击生成音频按钮',
@@ -208,7 +228,7 @@ if __name__ == '__main__':
                         default='pretrained_models/CosyVoice-300M',
                         help='local path or modelscope repo id')
     args = parser.parse_args()
-    cosyvoice = CosyVoice(args.model_dir)
+    cosyvoice = CosyVoice(args.model_dir, True, True, True)
     sft_spk = cosyvoice.list_avaliable_spks()
     prompt_sr, target_sr = 16000, 22050
     default_data = np.zeros(target_sr)

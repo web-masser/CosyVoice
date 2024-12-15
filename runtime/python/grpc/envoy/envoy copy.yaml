@@ -1,0 +1,56 @@
+static_resources:
+  listeners:
+    - name: listener_0
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 6712
+      filter_chains:
+        - filter_chain_match:
+            transport_protocol: "tls"
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager"
+                codec_type: AUTO
+                stat_prefix: ingress_http
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["mznpy.com"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: grpc_backend
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext"
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain:
+                      filename: "/etc/envoy/certs/mznpy.com.pem"
+                    private_key:
+                      filename: "/etc/envoy/certs/mznpy.com.key"
+              require_client_certificate: false
+
+  clusters:
+    - name: grpc_backend
+      connect_timeout: 5s
+      type: LOGICAL_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: grpc_backend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 0.0.0.0
+                      port_value: 50051

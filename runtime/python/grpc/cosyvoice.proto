@@ -5,6 +5,10 @@ option go_package = "protos/";
 
 service CosyVoice{
   rpc Inference(Request) returns (stream Response) {}
+  rpc SaveShot(SaveShotRequest) returns (SaveShotResponse) {}
+  rpc AppZeroOutput(AppZeroOutputRequest) returns (stream Response) {}
+  rpc InferenceCrossLingual(CrossLingualRequest) returns (stream Response) {}
+  rpc Translate(TranslateRequest) returns (TranslateResponse) {}
 }
 
 message Request{
@@ -40,4 +44,40 @@ message instructRequest{
 
 message Response{
   bytes tts_audio = 1;
+}
+
+message SaveShotRequest {
+  bytes prompt_audio = 1;
+  string file_name = 2;
+}
+
+message SaveShotResponse {
+  bool success = 1;
+}
+
+message AppZeroOutputRequest {
+  string file_name = 1;
+  string tts_text = 2;
+  string prompt_text = 3;
+  string user_id = 4;
+  bool stream = 5;
+  float speed = 6;
+  int32 seed = 7;
+}
+
+message CrossLingualRequest {
+  string file_name = 1;
+  string tts_text = 2;
+  string user_id = 3;
+  bool stream = 4;
+  float speed = 5;
+  int32 seed = 6;
+}
+
+message TranslateRequest {
+  string text = 1;
+}
+
+message TranslateResponse {
+  string translated_text = 1;
 }
