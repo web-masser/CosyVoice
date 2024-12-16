@@ -33,11 +33,12 @@ import uvicorn
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+import asyncio
 
 # from modelscope.pipelines import pipeline
 # from modelscope.utils.constant import Tasks
 
-
+thread_pool = ThreadPoolExecutor(max_workers=4)
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -46,17 +47,28 @@ sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.utils.file_utils import load_wav
 from cosyvoice.utils.common import set_all_random_seed
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 获取当前进程的ID，用于确定使用哪个GPU
-    worker_id = os.getpid() % 2  # 使用进程ID模2来分配GPU
+    # 确保有两张 GPU
+    gpu_count = torch.cuda.device_count()
+    if gpu_count < 2:
+        raise RuntimeError("需要两张 GPU 来运行服务")
     
-    # 设置当前进程使用的GPU
-    device = f'cuda:{worker_id}'
+    # 获取当前进程的 ID
+    pid = os.getpid()
+    
+    # 根据进程 ID 分配 GPU
+    gpu_id = 0 if pid % 2 == 0 else 1
+    
+    # 设置当前进程使用的 GPU
+    device = f'cuda:{gpu_id}'
     torch.cuda.set_device(device)
-    print(f"Worker {os.getpid()} using {device}")
     
-    # 启动时执行
+    # 打印详细信息
+    print(f"进程 {pid} 使用 GPU {gpu_id} ({torch.cuda.get_device_name(gpu_id)})")
+    
+    # 初始化模型等其他操作...
     from cosyvoice.cli.cosyvoice import CosyVoice
     global cosyvoice
     cosyvoice = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M', True, True)
@@ -109,7 +121,7 @@ def generate_data2(model_output, file_path):
         tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
         all_speech.append(i['tts_speech'])
         # 确保所有张量是2D并拼接
-        concatenated_speech = torch.cat(all_speech, dim=1)  # 在时间维度上拼接
+        concatenated_speech = torch.cat(all_speech, dim=1)  # 在时间维度拼接
         
         with tempfile.NamedTemporaryFile(delete=False, dir="./output_data", suffix=".wav") as temp_file:
             temp_file_path = temp_file.name
@@ -145,10 +157,28 @@ async def inference_cross_lingual(input: dict):
     set_all_random_seed(int(input["seed"]))
     prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
     file_path = f"./output_data/{input['user_id']}_single.wav"
+    
     if os.path.exists(file_path):
-            os.remove(file_path)
-    model_output = cosyvoice.inference_cross_lingual(input["tts_text"], prompt_speech_16k, stream=input["stream"], speed=input["speed"])
-    return StreamingResponse(generate_data2(model_output, file_path ), media_type="audio/wav")
+        os.remove(file_path)
+    
+    # 使用线程池执行推理
+    def run_inference():
+        return cosyvoice.inference_cross_lingual(
+            input["tts_text"], 
+            prompt_speech_16k, 
+            stream=input["stream"], 
+            speed=input["speed"]
+        )
+    
+    # 在线程池中执行推理，并使用 asyncio.wrap_future 包装
+    future = app.state.thread_pool.submit(run_inference)
+    model_output = await asyncio.wrap_future(future)
+    
+    # 保持原有的流式响应
+    return StreamingResponse(
+        generate_data2(model_output, file_path), 
+        media_type="audio/wav"
+    )
     
 # @app.post("/translate")
 # async def inference_cross_lingual(input: dict):
