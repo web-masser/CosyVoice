@@ -72,6 +72,7 @@ conda install -y -c conda-forge pynini==2.1.5
 streamlit run text_client.py
 
 python webui.py --port 50000 --model_dir pretrained_models/CosyVoice-300M
+python webui.py --port 50000 --model_dir pretrained_models/CosyVoice2-0.5B
 
 # If you encounter sox compatibility issues
 # ubuntu

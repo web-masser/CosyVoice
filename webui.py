@@ -19,34 +19,12 @@ import numpy as np
 import torch
 import torchaudio
 import random
-import time
 import librosa
-import gc   
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append('{}/third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
 from cosyvoice.utils.file_utils import load_wav, logging
 from cosyvoice.utils.common import set_all_random_seed
-
-
-# 检查CUDA是否可用
-print("CUDA 是否可用:", torch.cuda.is_available())
-
-# 查看当前 PyTorch 使用的 CUDA 版本
-print("PyTorch CUDA 版本:", torch.version.cuda)
-
-# 查看可用的 GPU 数量
-print("可用 GPU 数量:", torch.cuda.device_count())
-
-# 查看当前 GPU 设备名称
-if torch.cuda.is_available():
-    print("当前 GPU 设备:", torch.cuda.get_device_name(0))
-
-# 简单的 CUDA 运算测试
-if torch.cuda.is_available():
-    # 创建一个张量并移至 GPU
-    x = torch.tensor([1., 2.]).cuda()
-    print("测试张量在 GPU 上:", x)
 
 inference_mode_list = ['预训练音色', '3s极速复刻', '跨语种复刻', '自然语言控制']
 instruct_dict = {'预训练音色': '1. 选择预训练音色\n2. 点击生成音频按钮',
@@ -145,7 +123,6 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
         logging.info('get cross_lingual inference request')
         prompt_speech_16k = postprocess(load_wav(prompt_wav, prompt_sr))
         set_all_random_seed(seed)
-        audio_chunks = []
         for i in cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k, stream=stream, speed=speed):
             yield (cosyvoice.sample_rate, i['tts_speech'].numpy().flatten())
     else:
@@ -167,7 +144,7 @@ def main():
         with gr.Row():
             mode_checkbox_group = gr.Radio(choices=inference_mode_list, label='选择推理模式', value=inference_mode_list[0])
             instruction_text = gr.Text(label="操作步骤", value=instruct_dict[inference_mode_list[0]], scale=0.5)
-            sft_dropdown = gr.Dropdown(choices=sft_spk, label='选择预训练音色', value=sft_spk[0], scale=0.25)
+            sft_dropdown = gr.Dropdown(choices=sft_spk, label='选择预训练音色', value=sft_spk[0] if len(sft_spk) != 0 else '', scale=0.25)
             stream = gr.Radio(choices=stream_mode_list, label='是否流式推理', value=stream_mode_list[0][1])
             speed = gr.Number(value=1, label="速度调节(仅支持非流式推理)", minimum=0.5, maximum=2.0, step=0.1)
             with gr.Column(scale=0.25):
