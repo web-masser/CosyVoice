@@ -121,7 +121,7 @@ def generate_data2(model_output, file_path):
         tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
         all_speech.append(i['tts_speech'])
         # 确保所有张量是2D并拼接
-        concatenated_speech = torch.cat(all_speech, dim=1)  # 在时间维度拼接
+        concatenated_speech = torch.cat(all_speech, dim=1)  # 在时间维度��拼接
         
         with tempfile.NamedTemporaryFile(delete=False, dir="./output_data", suffix=".wav") as temp_file:
             temp_file_path = temp_file.name
