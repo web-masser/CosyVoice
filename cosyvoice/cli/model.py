@@ -264,8 +264,9 @@ class CosyVoice2Model:
     def __init__(self,
                  llm: torch.nn.Module,
                  flow: torch.nn.Module,
-                 hift: torch.nn.Module):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                 hift: torch.nn.Module,
+                 deviceId: int = 0):
+        self.device = torch.device(f'cuda:{deviceId}' if torch.cuda.is_available() else 'cpu')
         self.llm = llm
         self.flow = flow
         self.hift = hift

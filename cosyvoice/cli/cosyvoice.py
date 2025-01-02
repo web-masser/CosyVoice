@@ -136,7 +136,7 @@ class CosyVoice:
 
 class CosyVoice2(CosyVoice):
 
-    def __init__(self, model_dir, load_jit=False, load_onnx=False, load_trt=False):
+    def __init__(self, model_dir, load_jit=False, load_onnx=False, load_trt=False, deviceId=0):
         instruct = True if '-Instruct' in model_dir else False
         self.model_dir = model_dir
         if not os.path.exists(model_dir):
@@ -154,7 +154,7 @@ class CosyVoice2(CosyVoice):
         if torch.cuda.is_available() is False and load_jit is True:
             load_jit = False
             logging.warning('cpu do not support jit, force set to False')
-        self.model = CosyVoice2Model(configs['llm'], configs['flow'], configs['hift'])
+        self.model = CosyVoice2Model(configs['llm'], configs['flow'], configs['hift'], deviceId=deviceId)
         self.model.load('{}/llm.pt'.format(model_dir),
                         '{}/flow.pt'.format(model_dir),
                         '{}/hift.pt'.format(model_dir))
