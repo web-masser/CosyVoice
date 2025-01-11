@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI):
         from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
         global cosyvoice
         cosyvoice = CosyVoice2('D:/project/CosyVoice/pretrained_models/CosyVoice2-0.5B', 
-                              load_jit=True, load_onnx=True, load_trt=False, deviceId=1)
+                              load_jit=True, load_trt=False, fp16=True)
         app.state.thread_pool = ThreadPoolExecutor(max_workers=4)
         
         yield
@@ -368,12 +368,39 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 prompt_speech_16k = torch.load(f"./py_data/{data['file_name']}.pt")
                 
                 def run_inference():
-                    return cosyvoice.inference_cross_lingual(
-                        data["tts_text"],
-                        prompt_speech_16k,
-                        stream=data.get("stream", True),
-                        speed=data.get("speed", 1.0)
-                    )
+                    if (data.get("language") not in [None, ""] or data.get("tone") not in [None, ""]):
+                        instruct_text = "用"
+                        
+                        if data.get("tone") not in [None, ""]:
+                            if data.get("language") not in [None, ""]:
+                                instruct_text += data["tone"] + data["language"]
+                            else:
+                                instruct_text += data["tone"] + "的语气"
+                            
+                        instruct_text += "说"
+
+                        return cosyvoice.inference_instruct2(
+                            data["tts_text"],
+                            instruct_text,
+                            prompt_speech_16k,
+                            stream=data.get("stream", True),
+                            speed=data.get("speed", 1.0)
+                        )
+                    elif data.get("prompt_text", "") != "":
+                        return cosyvoice.inference_zero_shot(
+                            data["tts_text"],
+                            data["prompt_text"],
+                            prompt_speech_16k,
+                            stream=data.get("stream", True),
+                            speed=data.get("speed", 1.0)
+                        )
+                    else:
+                        return cosyvoice.inference_cross_lingual(
+                            data["tts_text"],
+                            prompt_speech_16k,
+                            stream=data.get("stream", True),
+                            speed=data.get("speed", 1.0)
+                        )
                 
                 print("开始执行推理...")
                 future = app.state.thread_pool.submit(run_inference)
@@ -415,46 +442,21 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         print(f"客户端 {client_id} 断开连接")
 # -------------------------------------------------------------------------------  
 
-def create_ssl_context():
-    # 创建 SSL 上下文
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    
-    # 基本配置
-    ssl_context.verify_mode = ssl.CERT_NONE
-    ssl_context.check_hostname = False
-    
-    # 设置协议版本
-    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-    ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
-    
-    # 设置加密套件 (特别是 iOS 支持的)
-    ssl_context.set_ciphers(':'.join([
-        'ECDHE-ECDSA-AES128-GCM-SHA256',
-        'ECDHE-RSA-AES128-GCM-SHA256',
-        'ECDHE-ECDSA-AES256-GCM-SHA384',
-        'ECDHE-RSA-AES256-GCM-SHA384',
-        'DHE-RSA-AES128-GCM-SHA256',
-        'DHE-RSA-AES256-GCM-SHA384',
-        'TLS_AES_128_GCM_SHA256',  # TLS 1.3
-        'TLS_AES_256_GCM_SHA384'   # TLS 1.3
-    ]))
-    
-    return ssl_context
 
 if __name__ == '__main__':
     try:
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        context.verify_mode = ssl.CERT_NONE
-        context.check_hostname = False
+        # context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        # context.verify_mode = ssl.CERT_NONE
+        # context.check_hostname = False
         
-        # macOS 偏好 TLS 1.2
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.maximum_version = ssl.TLSVersion.TLSv1_2  # 限制为 TLS 1.2
+        # # macOS 偏好 TLS 1.2
+        # context.minimum_version = ssl.TLSVersion.TLSv1_2
+        # context.maximum_version = ssl.TLSVersion.TLSv1_2  # 限制为 TLS 1.2
         
-        # 使用 macOS 原生支持的加密套件
-        context.set_ciphers('ECDHE-RSA-AES128-GCM-SHA256')  # 只用一个最基本的
+        # # 使用 macOS 原生支持的加密套件
+        # context.set_ciphers('ECDHE-RSA-AES128-GCM-SHA256')  # 只用一个最基本的
         
-        print("SSL 配置完成，准备启动服务器...")
+        # print("SSL 配置完成，准备启动服务器...")
         
         uvicorn.run(
             "server:app",
@@ -462,14 +464,8 @@ if __name__ == '__main__':
             port=6712,
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
-            ssl_version=ssl.PROTOCOL_TLSv1_2,
-            log_level="debug",
+            # ssl_version=ssl.PROTOCOL_TLSv1_2,
             ws="websockets",
-            http="h11",
-            ws_max_size=1024*1024*10,
-            ws_ping_interval=20,
-            ws_ping_timeout=30,
-            ws_per_message_deflate=False
         )
         
     except Exception as e:

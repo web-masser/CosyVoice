@@ -79,15 +79,15 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
     else:
         prompt_wav = None
     # if instruct mode, please make sure that model is iic/CosyVoice-300M-Instruct and not cross_lingual mode
-    if mode_checkbox_group in ['自然语言控制']:
-        if cosyvoice.frontend.instruct2 is False:
-            gr.Warning('您正在使用自然语言控制模式, {}模型不支持此模式, 请使用iic/CosyVoice-300M-Instruct模型'.format(args.model_dir))
-            yield (cosyvoice.sample_rate, default_data)
-        if instruct_text == '':
-            gr.Warning('您正在使用自然语言控制模式, 请输入instruct文本')
-            yield (cosyvoice.sample_rate, default_data)
-        if prompt_wav is not None or prompt_text != '':
-            gr.Info('您正在使用自然语言控制模式, prompt音频/prompt文本会被忽略')
+    # if mode_checkbox_group in ['自然语言控制']:
+    #     if cosyvoice.frontend.instruct is False:
+    #         gr.Warning('您正在使用自然语言控制模式, {}模型不支持此模式, 请使用iic/CosyVoice-300M-Instruct模型'.format(args.model_dir))
+    #         yield (cosyvoice.sample_rate, default_data)
+    #     if instruct_text == '':
+    #         gr.Warning('您正在使用自然语言控制模式, 请输入instruct文本')
+    #         yield (cosyvoice.sample_rate, default_data)
+    #     if prompt_wav is not None or prompt_text != '':
+    #         gr.Info('您正在使用自然语言控制模式, prompt音频/prompt文本会被忽略')
     # if cross_lingual mode, please make sure that model is iic/CosyVoice-300M and tts_text prompt_text are different language
     if mode_checkbox_group in ['跨语种复刻']:
         if cosyvoice.instruct is True:
@@ -141,8 +141,9 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
             yield (cosyvoice.sample_rate, i['tts_speech'].numpy().flatten())
     else:
         logging.info('get instruct inference request')
+        prompt_speech_16k = postprocess(load_wav(prompt_wav, prompt_sr))
         set_all_random_seed(seed)
-        for i in cosyvoice.inference_instruct(tts_text, sft_dropdown, instruct_text, stream=stream, speed=speed):
+        for i in cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_speech_16k, stream=stream):
             yield (cosyvoice.sample_rate, i['tts_speech'].numpy().flatten())
 
 
@@ -196,8 +197,8 @@ if __name__ == '__main__':
                         default='pretrained_models/CosyVoice2-0.5B',
                         help='local path or modelscope repo id')
     args = parser.parse_args()
-    cosyvoice = CosyVoice2(args.model_dir, load_jit=True, load_onnx=True, load_trt=False) if 'CosyVoice2' in args.model_dir else CosyVoice(args.model_dir, load_jit=True, load_onnx=True, fp16=True)
-    sft_spk = cosyvoice.list_avaliable_spks()
+    cosyvoice = CosyVoice2(args.model_dir) if 'CosyVoice2' in args.model_dir else CosyVoice(args.model_dir)
+    sft_spk = cosyvoice.list_available_spks() or []
     prompt_sr = 16000
     default_data = np.zeros(cosyvoice.sample_rate)
     main()
