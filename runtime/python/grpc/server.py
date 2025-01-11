@@ -33,6 +33,7 @@ import torchaudio
 import tempfile
 import io
 import ffmpeg
+from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s %(levelname)s %(message)s')
@@ -56,7 +57,13 @@ class HeaderInterceptor(grpc.ServerInterceptor):
 
 class CosyVoiceServiceImpl(cosyvoice_pb2_grpc.CosyVoiceServicer):
     def __init__(self, args):
-        self.cosyvoice = CosyVoice(args.model_dir)
+        try:
+            self.cosyvoice = CosyVoice(args.model_dir)
+        except Exception:
+            try:
+                self.cosyvoice = CosyVoice2(args.model_dir)
+            except Exception:
+                raise TypeError('no valid model_type!')
         logging.info('grpc service initialized')
         
     def convert_audio_to_16k(self, input_audio: bytes) -> bytes:
