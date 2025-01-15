@@ -23,6 +23,7 @@ import torchaudio
 import os
 import re
 import inflect
+import logging
 try:
     import ttsfrd
     use_ttsfrd = True
@@ -42,33 +43,49 @@ class CosyVoiceFrontEnd:
                  campplus_model: str,
                  speech_tokenizer_model: str,
                  spk2info: str = '',
-                 allowed_special: str = 'all'):
+                 allowed_special: str = 'all',
+                 device_id: int = 0):
+        logging.info("Initializing CosyVoiceFrontEnd")
         self.tokenizer = get_tokenizer()
+        logging.info("Tokenizer obtained")
         self.feat_extractor = feat_extractor
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logging.info("Feature extractor obtained")
+        self.device = torch.device(f'cuda:{device_id}' if torch.cuda.is_available() else 'cpu')
+        logging.info(f"Device set to: {self.device}")
         option = onnxruntime.SessionOptions()
         option.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
         option.intra_op_num_threads = 1
+        logging.info("ONNX session options configured")
         self.campplus_session = onnxruntime.InferenceSession(campplus_model, sess_options=option, providers=["CPUExecutionProvider"])
+        logging.info("CampPlus ONNX session created")
         self.speech_tokenizer_session = onnxruntime.InferenceSession(speech_tokenizer_model, sess_options=option,
                                                                      providers=["CUDAExecutionProvider" if torch.cuda.is_available() else
                                                                                 "CPUExecutionProvider"])
+        logging.info("Speech tokenizer ONNX session created")
         if os.path.exists(spk2info):
             self.spk2info = torch.load(spk2info, map_location=self.device)
+            logging.info(f"Speaker info loaded from {spk2info}")
         else:
             self.spk2info = {}
+            logging.info("Speaker info file not found, using empty dictionary")
         self.allowed_special = allowed_special
+        logging.info(f"Allowed special set to: {self.allowed_special}")
         self.use_ttsfrd = use_ttsfrd
         if self.use_ttsfrd:
             self.frd = ttsfrd.TtsFrontendEngine()
             ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
             assert self.frd.initialize('{}/../../pretrained_models/CosyVoice-ttsfrd/resource'.format(ROOT_DIR)) is True, \
                 'failed to initialize ttsfrd resource'
+            logging.info("TTS Frontend Engine initialized")
             self.frd.set_lang_type('pinyinvg')
+            logging.info("Language type set to pinyinvg")
         else:
-            self.zh_tn_model = ZhNormalizer(remove_erhua=False, full_to_half=False, overwrite_cache=True)
+            self.zh_tn_model = ZhNormalizer(remove_erhua=False, full_to_half=False, overwrite_cache=False)
+            logging.info("Chinese text normalizer initialized")
             self.en_tn_model = EnNormalizer()
+            logging.info("English text normalizer initialized")
             self.inflect_parser = inflect.engine()
+            logging.info("Inflect parser initialized")
 
     def _extract_text_token(self, text):
         text_token = self.tokenizer.encode(text, allowed_special=self.allowed_special)

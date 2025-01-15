@@ -21,6 +21,7 @@ from contextlib import nullcontext
 import uuid
 from cosyvoice.utils.common import fade_in_out
 from cosyvoice.utils.file_utils import convert_onnx_to_trt
+import logging
 
 
 class CosyVoiceModel:
@@ -29,8 +30,10 @@ class CosyVoiceModel:
                  llm: torch.nn.Module,
                  flow: torch.nn.Module,
                  hift: torch.nn.Module,
-                 fp16: bool):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                 fp16: bool,
+                 device_id: int = 0):
+        torch.cuda.set_device(device_id)
+        self.device = torch.device(f'cuda:{device_id}' if torch.cuda.is_available() else 'cpu')
         self.llm = llm
         self.flow = flow
         self.hift = hift
@@ -272,38 +275,57 @@ class CosyVoice2Model(CosyVoiceModel):
                  llm: torch.nn.Module,
                  flow: torch.nn.Module,
                  hift: torch.nn.Module,
-                 fp16: bool):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                 fp16: bool,
+                 device_id: int = 0):
+        torch.cuda.set_device(device_id)
+        logging.info(f"初始化 CosyVoice2Model, device_id: {device_id}")
+        self.device = torch.device(f'cuda:{device_id}' if torch.cuda.is_available() else 'cpu')
+        logging.info(f"使用设备: {self.device}")
+        
         self.llm = llm
-        self.flow = flow
+        self.flow = flow 
         self.hift = hift
         self.fp16 = fp16
         self.llm.fp16 = fp16
         self.flow.fp16 = fp16
+        
         if self.fp16 is True:
+            logging.info("使用 FP16 精度")
             self.llm.half()
             self.flow.half()
+            
+        # 记录关键参数设置
         self.token_hop_len = 2 * self.flow.input_frame_rate
-        # here we fix flow encoder/decoder decoding_chunk_size, in the future we will send it as arguments, or use cache
+        logging.info(f"token_hop_len: {self.token_hop_len}")
+        
+        # 设置 flow encoder/decoder 解码块大小
         self.flow.encoder.static_chunk_size = 2 * self.flow.input_frame_rate
         self.flow.decoder.estimator.static_chunk_size = 2 * self.flow.input_frame_rate * self.flow.token_mel_ratio
-        # hift cache
+        logging.info(f"encoder chunk size: {self.flow.encoder.static_chunk_size}")
+        logging.info(f"decoder chunk size: {self.flow.decoder.estimator.static_chunk_size}")
+        
+        # 其他参数设置保持不变
         self.mel_cache_len = 8
         self.source_cache_len = int(self.mel_cache_len * 480)
-        # speech fade in out
         self.speech_window = np.hamming(2 * self.source_cache_len)
-        # rtf and decoding related
         self.stream_scale_factor = 1
         self.llm_context = torch.cuda.stream(torch.cuda.Stream(self.device)) if torch.cuda.is_available() else nullcontext()
         self.lock = threading.Lock()
-        # dict used to store session related variable
+        
+        # 初始化字典
         self.tts_speech_token_dict = {}
         self.llm_end_dict = {}
         self.hift_cache_dict = {}
 
     def load_jit(self, flow_encoder_model):
-        flow_encoder = torch.jit.load(flow_encoder_model, map_location=self.device)
-        self.flow.encoder = flow_encoder
+        logging.info(f"加载 JIT 模型: {flow_encoder_model}")
+        try:
+            flow_encoder = torch.jit.load(flow_encoder_model, map_location=self.device)
+            self.flow.encoder = flow_encoder
+            logging.info("JIT 模型加载成功")
+        except Exception as e:
+            logging.error(f"JIT 模型加载失败: {str(e)}")
+            raise
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, uuid, token_offset, finalize=False, speed=1.0):
         tts_mel, _ = self.flow.inference(token=token.to(self.device),

@@ -18,15 +18,8 @@ import os
 import sys
 import logging
 import torch
-import ffmpeg
-import torchaudio
-import tempfile
-import uuid
 import time
-import json
 import ssl  # 添加这行导入
-# import aioredis
-# from aioredis import Redis
 from typing import Dict
 from fastapi import FastAPI, UploadFile, Form, File, HTTPException, WebSocket
 from fastapi.responses import StreamingResponse, FileResponse, Response
@@ -34,13 +27,15 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 import asyncio
+import ffmpeg
+import torchaudio
 
-import tensorrt as trt
-import torch
+import random
+from pathlib import Path
+from filelock import FileLock
 
-thread_pool = ThreadPoolExecutor(max_workers=12)
+# thread_pool = ThreadPoolExecutor(max_workers=12)
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -49,115 +44,64 @@ sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.utils.file_utils import load_wav
 from cosyvoice.utils.common import set_all_random_seed
 
-print(sys.version)
-print(ssl.OPENSSL_VERSION)
-
-# 在文件顶部添加全局配置
-NUM_WORKERS = torch.cuda.device_count()  # 根据 GPU 数量设置 worker 数
-print(f"检测到 {NUM_WORKERS} 个 GPU，将启动相同数量的 workers")
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 检查可用的 GPU
-    gpu_count = torch.cuda.device_count()
-    
-    # 获取当前进程的 ID 并等待一小段时间
-    # 这样可以让进程按顺序启动并分配到不同的 GPU
-    pid = os.getpid()
-    await asyncio.sleep(0.1 * (pid % gpu_count))  # 错开启动时间
-    
-    worker_count_file = ".worker_count"
-    worker_id = 0
-
-    cleanup_task = None
-    
-    async def cleanup_buffers():
-        while True:
-            try:
-                output_dir = "./output_data"
-                current_time = time.time()
-                for file in os.listdir(output_dir):
-                    if "_buffer" in file:
-                        file_path = os.path.join(output_dir, file)
-                        # 删除超过5分钟的缓冲文件
-                        if current_time - os.path.getmtime(file_path) > 300:
-                            safe_remove(file_path)
-            except Exception as e:
-                logging.error(f"Error in cleanup: {str(e)}")
-            await asyncio.sleep(300)  
-    
     try:
-        if os.path.exists(worker_count_file):
-            with open(worker_count_file, 'r') as f:
-                worker_id = int(f.read().strip()) + 1
-        with open(worker_count_file, 'w') as f:
-            f.write(str(worker_id))
-    except Exception as e:
-        print(f"警告：worker计数出错 - {e}")
-        worker_id = pid % gpu_count
-    
-    # 分配 GPU（按进程启动顺序）
-    gpu_id = worker_id % gpu_count
-    print(f"进程 {pid} 使用 GPU {gpu_id} ({torch.cuda.get_device_name(gpu_id)})")
 
-    # 在初始化模型之前清理 GPU 缓存
-    torch.cuda.empty_cache()
-    
-    # 确保当前进程使用指定的 GPU
-    torch.cuda.set_device(gpu_id)
-    
-    
-    try:
-        # 启动清理任务
-        cleanup_task = asyncio.create_task(cleanup_buffers())
+        logging.info(f"进程 {os.getpid()} 开始初始化")
         
-        # 初始化其他资源...
-        from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
+        with FileLock("gpu.lock"):
+            if os.path.exists("gpu_ids.txt"):
+                with open("gpu_ids.txt", "r") as f:
+                    used_gpus = [int(line.strip()) for line in f.readlines()]
+            else:
+                used_gpus = []
+
+            num_gpus = torch.cuda.device_count()
+            worker_gpu = None  # 初始化 worker_gpu 变量
+
+            # 检查已启动的 worker 数量
+            num_workers = len(used_gpus)
+
+            # 根据 worker 数量分配 GPU
+            if num_workers == 0:
+                worker_gpu = 0  # 第一个 worker 使用 GPU 0
+            elif 1 <= num_workers <= 3:
+                worker_gpu = 1  # 第二、三、四个 worker 使用 GPU 1
+            else:
+                raise Exception("No GPUs available for more than four workers")
+
+            # 记录使用的 GPU
+            with open("gpu_ids.txt", "a") as f:
+                f.write(f"{worker_gpu}\n")
+
         global cosyvoice
+        from cosyvoice.cli.cosyvoice import CosyVoice2
+        torch.cuda.set_device(worker_gpu)
+        app.state.thread_pool = ThreadPoolExecutor(max_workers=12)
         cosyvoice = CosyVoice2('D:/project/CosyVoice/pretrained_models/CosyVoice2-0.5B', 
-                              load_jit=True, load_trt=False, fp16=True)
-        app.state.thread_pool = ThreadPoolExecutor(max_workers=4)
+                              load_jit=True, 
+                              load_trt=False, 
+                              fp16=True,
+                              device_id=worker_gpu)  # 修改这里，直接传递设备对象
         
         yield
         
+    except Exception as e:
+        logging.error(f"lifespan 上下文中发生错误: {str(e)}", exc_info=True)
+        raise
+        
     finally:
-        # 清理资源
-        if cleanup_task:
-            cleanup_task.cancel()
-            try:
-                await cleanup_task
-            except asyncio.CancelledError:
-                pass
-        
-        # 清理其他资源
-        app.state.thread_pool.shutdown()
-        
-        # 最后一次清理所有缓冲文件
         try:
-            output_dir = "./output_data"
-            for file in os.listdir(output_dir):
-                if "_buffer" in file:
-                    file_path = os.path.join(output_dir, file)
-                    safe_remove(file_path)
+            if 'cosyvoice' in globals():
+                del cosyvoice
+            torch.cuda.empty_cache()
+            logging.info(f"进程 {os.getpid()} 清理完成")
         except Exception as e:
-            logging.error(f"Error in final cleanup: {str(e)}")
-
-    # 初始化模型等其他操作...
-    # from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
-    # global cosyvoice
-    # # cosyvoice = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M', True, True)
-    # cosyvoice = CosyVoice2('D:/project/CosyVoice/pretrained_models/CosyVoice2-0.5B', load_jit=True, load_onnx=True, load_trt=False, deviceId=1)
-    # app.state.thread_pool = ThreadPoolExecutor(max_workers=4)
-    
-    # yield
-    
-    # # 关闭时执行
-    # # 清理代码
-    # app.state.thread_pool.shutdown()
+            logging.error(f"清理过程中发生错误: {str(e)}", exc_info=True)
 
 app = FastAPI(lifespan=lifespan)
 
-# set cross region allowance
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -166,7 +110,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]
 )
-        
+
 def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     # 使用 ffmpeg 转换音频到 16kHz
     out, _ = (
@@ -189,140 +133,6 @@ async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)
     torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt")       
     return True
 
-def get_buffer_paths(file_path):
-    """获取双缓冲文件路径"""
-    base, ext = os.path.splitext(file_path)
-    return f"{base}_buffer1{ext}", f"{base}_buffer2{ext}"
-
-def safe_remove(file_path):
-    """安全删除文件"""
-    try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return True
-    except Exception as e:
-        logging.error(f"Error removing file {file_path}: {str(e)}")
-        return False
-
-def generate_data2(model_output, file_path):
-    all_speech = []
-    concatenated_speech = []
-    
-    # 获取双缓冲文件路径
-    buffer1, buffer2 = get_buffer_paths(file_path)
-    
-    # 决定使用哪个缓冲文件
-    if os.path.exists(buffer1):
-        current_buffer = buffer2
-        old_buffer = buffer1
-    else:
-        current_buffer = buffer1
-        old_buffer = buffer2
-        
-    try:
-        for i in model_output:
-            tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
-            all_speech.append(i['tts_speech'])
-            concatenated_speech = torch.cat(all_speech, dim=1)
-            
-            try:
-                # 保存到当前缓冲文件
-                torchaudio.save(current_buffer, concatenated_speech, 22050, format="wav")
-                
-                # 等待文件写入完成
-                time.sleep(0.1)
-                
-                # 使用 shutil.copy2 替代硬链接
-                import shutil
-                try:
-                    shutil.copy2(current_buffer, file_path)
-                except Exception as e:
-                    logging.error(f"Error copying file: {str(e)}")
-                
-                # 现在旧的缓冲文件已经不再被使用，可以安全删除
-                if os.path.exists(old_buffer) and old_buffer != current_buffer:
-                    safe_remove(old_buffer)
-                
-            except Exception as e:
-                logging.error(f"Error in file operation: {str(e)}")
-                
-            yield tts_audio
-            
-    except Exception as e:
-        logging.error(f"Error in generate_data2: {str(e)}")
-    finally:
-        # 确保清理临时文件
-        try:
-            safe_remove(current_buffer)
-            safe_remove(old_buffer)
-        except:
-            pass
-
-@app.post("/app-zero-output")
-async def inference_zero_shot(input: dict):
-    set_all_random_seed(int(input["seed"]))
-    prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
-    file_path = f"./output_data/{input['user_id']}_single.wav"
-    if os.path.exists(file_path):
-            os.remove(file_path)
-    model_output = cosyvoice.inference_zero_shot(input["tts_text"], input["prompt_text"], prompt_speech_16k, stream=input["stream"], speed=input["speed"])
-    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
-
-@app.get("/audio/{type}/{user_id}")
-async def get_audio(user_id: str, type: str):
-    file_path = f"./output_data/{user_id}_{type}.wav"
-    if not os.path.exists(file_path):
-        return {"error": "File not found"}
-
-@app.post("/inference_cross_lingual")
-async def inference_cross_lingual(input: dict):
-    set_all_random_seed(int(input["seed"]))
-    prompt_speech_16k = torch.load(f"./py_data/{input['file_name']}.pt")
-    file_path = f"./output_data/{input['user_id']}_single.wav"
-    
-    if os.path.exists(file_path):
-        os.remove(file_path)
-    
-    # 使用线程池执行推理
-    def run_inference():
-        return cosyvoice.inference_cross_lingual(
-            input["tts_text"], 
-            prompt_speech_16k, 
-            stream=input["stream"], 
-            speed=input["speed"]
-        )
-    
-    # 在线程池中执行推理，并使用 asyncio.wrap_future 包装
-    future = app.state.thread_pool.submit(run_inference)
-    model_output = await asyncio.wrap_future(future)
-    
-    # 保持原有的流式响应
-    return StreamingResponse(
-        generate_data2(model_output, file_path), 
-        media_type="audio/wav"
-    )
-    
-# @app.post("/translate")
-# async def inference_cross_lingual(input: dict):
-#     input_sequence = input['text']
-#     pipeline_ins = pipeline(task=Tasks.translation, model="damo/nlp_csanmt_translation_zh2en")
-#     outputs = pipeline_ins(input=input_sequence)
-#     return outputs
-
-@app.post("/inference_instruct")
-async def inference_instruct(input: dict):
-    set_all_random_seed(int(input["seed"]))
-    file_path = f"./output_data/{input['user_id']}_single.wav"
-    if os.path.exists(file_path):
-            os.remove(file_path)
-    logging.info(input["natural_text"])
-    if input["natural_text"].endswith(('。', ',', '，', '、', '.', '?', '!')):
-        input["natural_text"] = input["natural_text"][:-1]
-    
-    model_output = cosyvoice_instruct.inference_instruct(input["tts_text"], input["speak"], input["natural_text"],stream=input["stream"], speed=input["speed"])
-    return StreamingResponse(generate_data2(model_output, file_path), media_type="audio/wav")
-
-
 
 # websocket-------------------------------------------------------------------------------
 
@@ -344,13 +154,6 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-
-@app.websocket("/test")
-async def test_websocket(websocket: WebSocket):
-    await websocket.accept()
-    await websocket.send_text("连接成功")
-    await websocket.close()
-
 
 @app.websocket("/ws/audio/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
@@ -376,9 +179,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                                 instruct_text += data["tone"] + data["language"]
                             else:
                                 instruct_text += data["tone"] + "的语气"
+                        elif data.get("language") not in [None, ""]:
+                            instruct_text += data["language"] + "的语气"
                             
                         instruct_text += "说"
-
+                        print('inference_instruct2', data["tts_text"], instruct_text, prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
                         return cosyvoice.inference_instruct2(
                             data["tts_text"],
                             instruct_text,
@@ -386,7 +191,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             stream=data.get("stream", True),
                             speed=data.get("speed", 1.0)
                         )
-                    elif data.get("prompt_text", "") != "":
+                    elif data.get("prompt_text", "") not in [None, ""]:
+                        print('inference_zero_shot', data["tts_text"], data["prompt_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
                         return cosyvoice.inference_zero_shot(
                             data["tts_text"],
                             data["prompt_text"],
@@ -395,6 +201,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             speed=data.get("speed", 1.0)
                         )
                     else:
+                        print('inference_cross_lingual', data["tts_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
                         return cosyvoice.inference_cross_lingual(
                             data["tts_text"],
                             prompt_speech_16k,
@@ -435,40 +242,40 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     finally:
         try:
             # 使用标准的关闭代码
-            await websocket.close(code=1000, reason="Normal closure")
+            if not websocket.application_state == "closed":
+                await websocket.close(code=1000, reason="Normal closure")
         except Exception as e:
             print(f"关闭连接时出错: {str(e)}")
         manager.disconnect(client_id)
         print(f"客户端 {client_id} 断开连接")
 # -------------------------------------------------------------------------------  
 
+def clear_gpu_ids():
+    """清空 GPU ID 记录文件"""
+    if os.path.exists("gpu_ids.txt"):
+        os.remove("gpu_ids.txt")
+    logging.info("GPU ID 记录已清空")
+
+def release_resources():
+    """释放所有资源，包括文件锁和 GPU ID 记录"""
+    clear_gpu_ids()
+    # 如果有其他需要释放的资源，也可以在这里添加
+    logging.info("所有资源已释放")
 
 if __name__ == '__main__':
+    clear_gpu_ids()  # 在服务器启动前清空 GPU ID 文件
     try:
-        # context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        # context.verify_mode = ssl.CERT_NONE
-        # context.check_hostname = False
-        
-        # # macOS 偏好 TLS 1.2
-        # context.minimum_version = ssl.TLSVersion.TLSv1_2
-        # context.maximum_version = ssl.TLSVersion.TLSv1_2  # 限制为 TLS 1.2
-        
-        # # 使用 macOS 原生支持的加密套件
-        # context.set_ciphers('ECDHE-RSA-AES128-GCM-SHA256')  # 只用一个最基本的
-        
-        # print("SSL 配置完成，准备启动服务器...")
-        
+        logging.info("服务器开始启动")
         uvicorn.run(
             "server:app",
             host="0.0.0.0",
             port=6712,
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
-            # ssl_version=ssl.PROTOCOL_TLSv1_2,
             ws="websockets",
+            workers=2
         )
-        
     except Exception as e:
-        print(f"错误: {str(e)}")
-        import traceback
-        print(traceback.format_exc())
+        logging.error(f"服务器启动失败: {str(e)}", exc_info=True)
+    finally:
+        release_resources()  # 确保在程序结束时释放所有资源

@@ -25,7 +25,7 @@ from cosyvoice.utils.class_utils import get_model_type
 
 class CosyVoice:
 
-    def __init__(self, model_dir, load_jit=False, load_trt=False, fp16=False):
+    def __init__(self, model_dir, load_jit=False, load_trt=False, fp16=False, device_id=0):
         self.instruct = True if '-Instruct' in model_dir else False
         self.model_dir = model_dir
         self.fp16 = fp16
@@ -39,12 +39,13 @@ class CosyVoice:
                                           '{}/campplus.onnx'.format(model_dir),
                                           '{}/speech_tokenizer_v1.onnx'.format(model_dir),
                                           '{}/spk2info.pt'.format(model_dir),
-                                          configs['allowed_special'])
+                                          configs['allowed_special'],
+                                          device_id)
         self.sample_rate = configs['sample_rate']
         if torch.cuda.is_available() is False and (load_jit is True or load_trt is True or fp16 is True):
             load_jit, load_trt, fp16 = False, False, False
             logging.warning('no cuda device, set load_jit/load_trt/fp16 to False')
-        self.model = CosyVoiceModel(configs['llm'], configs['flow'], configs['hift'], fp16)
+        self.model = CosyVoiceModel(configs['llm'], configs['flow'], configs['hift'], fp16, device_id)
         self.model.load('{}/llm.pt'.format(model_dir),
                         '{}/flow.pt'.format(model_dir),
                         '{}/hift.pt'.format(model_dir))
@@ -125,36 +126,55 @@ class CosyVoice:
 
 class CosyVoice2(CosyVoice):
 
-    def __init__(self, model_dir, load_jit=False, load_trt=False, fp16=False):
+    def __init__(self, model_dir, load_jit=False, load_trt=False, fp16=False, device_id=0):
         self.instruct = True if '-Instruct' in model_dir else False
         self.model_dir = model_dir
         self.fp16 = fp16
+        logging.info(f"Set instruct based on model_dir: {self.instruct}")
         if not os.path.exists(model_dir):
+            logging.info(f"Model directory does not exist, downloading: {model_dir}")
             model_dir = snapshot_download(model_dir)
+        logging.info(f"Model directory is set to: {model_dir}")
+        print("="*50)
+        logging.info("CosyVoice2 initialization starts")
+        logging.info(f"Model directory: {model_dir}")
+        logging.info(f"Configuration: load_jit={load_jit}, load_trt={load_trt}, fp16={fp16}, device_id={device_id}")
         with open('{}/cosyvoice.yaml'.format(model_dir), 'r') as f:
+            logging.info(f"Loading configuration from {model_dir}/cosyvoice.yaml")
             configs = load_hyperpyyaml(f, overrides={'qwen_pretrain_path': os.path.join(model_dir, 'CosyVoice-BlankEN')})
+        logging.info("Configuration loaded successfully")
         assert get_model_type(configs) == CosyVoice2Model, 'do not use {} for CosyVoice2 initialization!'.format(model_dir)
+        logging.info("Model type check passed")
         self.frontend = CosyVoiceFrontEnd(configs['get_tokenizer'],
                                           configs['feat_extractor'],
                                           '{}/campplus.onnx'.format(model_dir),
                                           '{}/speech_tokenizer_v2.onnx'.format(model_dir),
                                           '{}/spk2info.pt'.format(model_dir),
-                                          configs['allowed_special'])
+                                          configs['allowed_special'],
+                                          device_id)
+        logging.info("Frontend components loaded successfully")
         self.sample_rate = configs['sample_rate']
+        logging.info(f"Sample rate set to: {self.sample_rate}")
         if torch.cuda.is_available() is False and (load_jit is True or load_trt is True or fp16 is True):
             load_jit, load_trt, fp16 = False, False, False
-            logging.warning('no cuda device, set load_jit/load_trt/fp16 to False')
-        self.model = CosyVoice2Model(configs['llm'], configs['flow'], configs['hift'], fp16)
+            logging.warning('No CUDA device available, setting load_jit/load_trt/fp16 to False')
+        self.model = CosyVoice2Model(configs['llm'], configs['flow'], configs['hift'], fp16, device_id)
+        logging.info("Model instance created")
         self.model.load('{}/llm.pt'.format(model_dir),
                         '{}/flow.pt'.format(model_dir),
                         '{}/hift.pt'.format(model_dir))
+        logging.info("Model weights loaded")
         if load_jit:
             self.model.load_jit('{}/flow.encoder.{}.zip'.format(model_dir, 'fp16' if self.fp16 is True else 'fp32'))
+            logging.info("JIT model loaded")
         if load_trt:
             self.model.load_trt('{}/flow.decoder.estimator.{}.mygpu.plan'.format(model_dir, 'fp16' if self.fp16 is True else 'fp32'),
                                 '{}/flow.decoder.estimator.fp32.onnx'.format(model_dir),
                                 self.fp16)
+            logging.info("TensorRT model loaded")
         del configs
+        print("="*50)
+        logging.info("CosyVoice2 initialization completed")
 
     def inference_instruct(self, *args, **kwargs):
         raise NotImplementedError('inference_instruct is not implemented for CosyVoice2!')
