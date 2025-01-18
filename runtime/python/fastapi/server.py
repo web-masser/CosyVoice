@@ -35,8 +35,6 @@ import random
 from pathlib import Path
 from filelock import FileLock
 
-# thread_pool = ThreadPoolExecutor(max_workers=12)
-
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.append('{}/../../..'.format(ROOT_DIR))
@@ -82,7 +80,7 @@ async def lifespan(app: FastAPI):
         cosyvoice = CosyVoice2('D:/project/CosyVoice/pretrained_models/CosyVoice2-0.5B', 
                               load_jit=True, 
                               load_trt=False, 
-                              fp16=True,
+                              fp16=False,
                               device_id=worker_gpu)  # 修改这里，直接传递设备对象
         
         yield
