@@ -114,9 +114,17 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     out, _ = (
         ffmpeg
         .input('pipe:0')
-        .filter('volume', '10dB')
-        .filter('atrim', duration=28)  # 只保留前30秒
-        .output('pipe:1', ar='16000', ac='1', format='wav')
+        .filter('volume', '3dB')  # 降低音量增益
+        .filter('highpass', f='20')  # 添加高通滤波器去除低频噪声
+        .filter('lowpass', f='20000')  # 添加低通滤波器去除高频噪声
+        .filter('atrim', duration=28)
+        .output('pipe:1', 
+                ar='16000',  # 采样率
+                ac='1',      # 单声道
+                format='wav',
+                acodec='pcm_s16le',  # 使用16位PCM编码
+                audio_bitrate='256k'  # 提高比特率以提升音质
+        )
         .run(input=input_audio.read(), capture_stdout=True, capture_stderr=True)
     )
     return out
