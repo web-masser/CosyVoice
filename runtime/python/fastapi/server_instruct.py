@@ -49,38 +49,41 @@ async def lifespan(app: FastAPI):
     try:
 
         logging.info(f"进程 {os.getpid()} 开始初始化")
+
+        worker_gpu = 1
         
-        with FileLock("gpu.lock"):
-            if os.path.exists("gpu_ids.txt"):
-                with open("gpu_ids.txt", "r") as f:
-                    used_gpus = [int(line.strip()) for line in f.readlines()]
-            else:
-                used_gpus = []
+        # with FileLock("gpu.lock"):
+        #     if os.path.exists("gpu_ids.txt"):
+        #         with open("gpu_ids.txt", "r") as f:
+        #             used_gpus = [int(line.strip()) for line in f.readlines()]
+        #     else:
+        #         used_gpus = []
 
-            num_gpus = torch.cuda.device_count()
-            worker_gpu = None  # 初始化 worker_gpu 变量
+        #     num_gpus = torch.cuda.device_count()
+        #     worker_gpu = None  # 初始化 worker_gpu 变量
 
-            # 检查已启动的 worker 数量
-            num_workers = len(used_gpus)
+        #     # 检查已启动的 worker 数量
+        #     num_workers = len(used_gpus)
 
-            # 根据 worker 数量分配 GPU
-            if num_workers == 0:
-                worker_gpu = 0  # 第一个 worker 使用 GPU 0
-            elif 1 <= num_workers <= 3:
-                worker_gpu = 1  # 第二、三、四个 worker 使用 GPU 1
-            else:
-                raise Exception("No GPUs available for more than four workers")
+        #     # 根据 worker 数量分配 GPU
+        #     if num_workers == 0:
+        #         worker_gpu = 0  # 第一个 worker 使用 GPU 0
+        #     elif 1 <= num_workers <= 3:
+        #         worker_gpu = 1  # 第二、三、四个 worker 使用 GPU 1
+        #     else:
+        #         raise Exception("No GPUs available for more than four workers")
 
-            # 记录使用的 GPU
-            with open("gpu_ids.txt", "a") as f:
-                f.write(f"{worker_gpu}\n")
+        #     # 记录使用的 GPU
+        #     with open("gpu_ids.txt", "a") as f:
+        #         f.write(f"{worker_gpu}\n")
 
         global cosyvoice
         global cosyvoice2
         from cosyvoice.cli.cosyvoice import CosyVoice2, CosyVoice
         torch.cuda.set_device(worker_gpu)
         app.state.thread_pool = ThreadPoolExecutor(max_workers=12)
-        cosyvoice = CosyVoice('D:/project/CosyVoice/pretrained_models/CosyVoice-300M', 
+
+        cosyvoice2 = CosyVoice2('D:/project/CosyVoice/pretrained_models/CosyVoice2-0.5B', 
                               load_jit=True, 
                               load_trt=False, 
                               fp16=False,
@@ -175,7 +178,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-@app.websocket("/ws/audio/{client_id}")
+@app.websocket("/ws/audio2/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     print("尝试建立 WebSocket 连接...")
     await websocket.accept()
@@ -287,13 +290,13 @@ if __name__ == '__main__':
     try:
         logging.info("服务器开始启动")
         uvicorn.run(
-            "server:app",
+            "server_instruct:app",
             host="0.0.0.0",
-            port=6712,
+            port=6715,
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
             ws="websockets",
-            workers=2,
+            workers=1
         )
     except Exception as e:
         logging.error(f"服务器启动失败: {str(e)}", exc_info=True)
