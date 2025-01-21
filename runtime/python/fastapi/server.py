@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import ffmpeg
 import torchaudio
+import librosa
 
 import random
 from pathlib import Path
@@ -41,6 +42,7 @@ sys.path.append('{}/../../..'.format(ROOT_DIR))
 sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.utils.file_utils import load_wav
 from cosyvoice.utils.common import set_all_random_seed
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -109,35 +111,46 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+max_val = 0.8
+def postprocess(speech, top_db=60, hop_length=220, win_length=440):
+    speech, _ = librosa.effects.trim(
+        speech, top_db=top_db,
+        frame_length=win_length,
+        hop_length=hop_length
+    )
+    if speech.abs().max() > max_val:
+        speech = speech / speech.abs().max() * max_val
+    speech = torch.concat([speech, torch.zeros(1, int(cosyvoice.sample_rate * 0.2))], dim=1)
+    return speech
+
 def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     # 使用 ffmpeg 转换音频到 16kHz
     out, _ = (
         ffmpeg
         .input('pipe:0')
         .filter('volume', '3dB')  # 降低音量增益
-        .filter('highpass', f='20')  # 添加高通滤波器去除低频噪声
-        .filter('lowpass', f='20000')  # 添加低通滤波器去除高频噪声
-        .filter('atrim', duration=28)
+        .filter('atrim', duration=29)
         .output('pipe:1', 
                 ar='16000',  # 采样率
                 ac='1',      # 单声道
                 format='wav',
                 acodec='pcm_s16le',  # 使用16位PCM编码
-                audio_bitrate='256k'  # 提高比特率以提升音质
+                audio_bitrate='64k',  # 降低比特率
+                compression_level='5'  # 压缩级别
         )
         .run(input=input_audio.read(), capture_stdout=True, capture_stderr=True)
     )
-    return out
+    return outd
 
 @app.post("/inference/app-zero-save")
 async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)):
     audio_data = await prompt_wav.read()
     converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))
     with io.BytesIO(converted_audio) as f:
-        prompt_speech_16k = load_wav(f, 16000)
+        prompt_speech_16k =  postprocess(load_wav(f, 16000))
     torchaudio.save(f"./py_data/{fileName}.wav", prompt_speech_16k, 16000, format="wav")
-    torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt")       
-    return True
+    torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt", _use_new_zipfile_serialization=True)       
+    return True           
 
 
 # websocket-------------------------------------------------------------------------------
@@ -169,7 +182,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         all_speech = []
         
-        while True:
+        while True:                                      
             data = await websocket.receive_json()
             print(f"收到客户端消息: {data}")
             
@@ -197,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             stream=data.get("stream", True),
                             speed=data.get("speed", 1.0)
                         )
-                    elif data.get("prompt_text", "") not in [None, ""]:
+                    elif data.get("prompt_text", "") not in [None, ""]:                                                           
                         print('inference_zero_shot', data["tts_text"], data["prompt_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
                         return cosyvoice.inference_zero_shot(
                             data["tts_text"],
