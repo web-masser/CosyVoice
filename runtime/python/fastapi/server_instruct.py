@@ -184,9 +184,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await websocket.accept()
     print("WebSocket 连接已接受")
     try:
+        # 用于收集整段合成结果，后续写成单个文件
         all_speech = []
-        
-        while True:                                      
+
+        while True:
             data = await websocket.receive_json()
             print(f"收到客户端消息: {data}")
             
@@ -241,6 +242,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 for i in model_output:
                     try:
                         all_speech.append(i['tts_speech'])
+                        
+
                         tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
                         # 确保数据大小合适
                         if len(tts_audio) > 0:
@@ -257,7 +260,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     await asyncio.sleep(0.1)  # 等待客户端处理
                 except Exception as e:
                     print(f"发送完成信号时出错: {str(e)}")
-                
+                    
     except Exception as e:
         if str(e):  # 只有在有实际错误信息时才记录
             logging.error(f"WebSocket error: {str(e)}")
