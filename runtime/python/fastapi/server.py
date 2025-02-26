@@ -31,10 +31,15 @@ import asyncio
 import ffmpeg
 import torchaudio
 import librosa
+import soundfile as sf
+import noisereduce as nr
 
 import random
 from pathlib import Path
 from filelock import FileLock
+from pydub import AudioSegment
+from openunmix.predict import separate
+from datetime import datetime
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -153,6 +158,61 @@ async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)
     torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt", _use_new_zipfile_serialization=True)       
     return True           
 
+# 确保输出目录存在
+output_dir = 'tq_person'
+os.makedirs(output_dir, exist_ok=True)
+
+@app.post("/inference/remove-background")
+async def remove_background(audio_file: UploadFile = File(...)):
+     # 保存临时文件 
+    temp_path = f"temp_audio/{audio_file.filename}" 
+    os.makedirs(os.path.dirname(temp_path),  exist_ok=True)
+    
+    with open(temp_path, "wb") as f:
+        content = await audio_file.read() 
+        f.write(content) 
+    
+    # 执行分离 
+    output_path = separate_vocals(temp_path)
+     # 返回结果 
+    return FileResponse(
+        output_path,
+        media_type="audio/wav",
+        filename="separated_vocals.wav" 
+    )
+
+def separate_vocals(input_path: str, output_dir: str = "output") -> str:
+    try:
+        # 加载音频文件
+        waveform, rate = sf.read(input_path)  # 使用 soundfile 读取音频
+        audio_tensor = torch.from_numpy(waveform).float()  # 转换为 PyTorch 张量
+
+        # 确保音频是单声道
+        if audio_tensor.ndim > 1:
+            audio_tensor = audio_tensor.mean(dim=0, keepdim=True)  # 转换为单声道
+
+        # 使用 Open-Unmix 的 separate 函数进行音轨分离
+        estimates = separate(audio_tensor.unsqueeze(0), rate)  # 选择设备（'cpu' 或 'cuda'）
+
+        # 创建输出目录
+        output_dir = Path(output_dir)
+        output_dir.mkdir(exist_ok=True)
+
+        # 保存人声音频到 tq_person 文件夹
+        tq_person_dir = Path("tq_person")
+        tq_person_dir.mkdir(exist_ok=True)  # 确保 tq_person 文件夹存在
+
+        # 根据当前时间生成文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        vocal_path = tq_person_dir / f"vocals_{timestamp}.wav"  # 使用时间戳命名文件
+
+        # 调整张量形状并保存
+        vocals = estimates['vocals'].squeeze(0)  # 去掉多余的维度
+        sf.write(str(vocal_path), vocals.numpy().T, rate)  # 保存人声
+
+        return str(vocal_path)
+    except Exception as e:
+        raise RuntimeError(f"音频处理失败: {str(e)}")
 
 # websocket-------------------------------------------------------------------------------
 
@@ -293,7 +353,7 @@ if __name__ == '__main__':
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
             ws="websockets",
-            workers=2,
+            workers=1
         )
     except Exception as e:
         logging.error(f"服务器启动失败: {str(e)}", exc_info=True)
