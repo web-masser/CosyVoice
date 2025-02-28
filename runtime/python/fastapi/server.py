@@ -40,6 +40,8 @@ from filelock import FileLock
 from pydub import AudioSegment
 from openunmix.predict import separate
 from datetime import datetime
+import re
+import uuid
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -162,37 +164,23 @@ async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)
 output_dir = 'tq_person'
 os.makedirs(output_dir, exist_ok=True)
 
+def sanitize_filename(filename: str) -> str:
+    """清理文件名，去掉不合法字符"""
+    return re.sub(r'[<>:"/\\|?*]', '_', filename)
+
 @app.post("/inference/remove-background")
 async def remove_background(audio_file: UploadFile = File(...)):
+    # 清理文件名
+    safe_filename = sanitize_filename(audio_file.filename)
+    temp_path = f"temp_audio/{safe_filename}" 
+    os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+
+    with open(temp_path, "wb") as f:
+        content = await audio_file.read() 
+        f.write(content) 
     
-    # # 读取音频文件内容
-    # audio_data = await audio_file.read()
-    
-    # # 使用 convert_audio_to_16k 转换音频为 16kHz WAV 格式
-    # converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))  # 调用转换函数
-
-    # # 将转换后的音频保存为临时文件
-    # wav_temp_path = f"temp_audio/{os.path.splitext(audio_file.filename)[0]}.wav"
-    # with open(wav_temp_path, "wb") as wav_file:
-    #     wav_file.write(converted_audio)
-
-    # # 执行分离 
-    # output_path = separate_vocals(wav_temp_path)
-
-
-    # 读取音频文件内容
-    audio_data = await audio_file.read()
-    
-    # 使用 convert_audio_to_16k 转换音频为 16kHz WAV 格式
-    converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))  # 调用转换函数
-
-    # 将转换后的音频保存为临时文件
-    wav_temp_path = f"temp_audio/{os.path.splitext(audio_file.filename)[0]}.wav"
-    with open(wav_temp_path, "wb") as wav_file:
-        wav_file.write(converted_audio)
-
     # 执行分离 
-    output_path = separate_vocals(wav_temp_path)
+    output_path = separate_vocals(temp_path)
 
     # 返回结果 
     return FileResponse(
@@ -201,11 +189,31 @@ async def remove_background(audio_file: UploadFile = File(...)):
         filename="separated_vocals.wav" 
     )
 
+def convert_to_wav(input_path: str, output_path: str) -> None:
+    """将音频文件转换为 WAV 格式"""
+    try:
+        ffmpeg.input(input_path).output(output_path).run(overwrite_output=True)
+    except Exception as e:
+        raise RuntimeError(f"音频转换失败: {str(e)}")
+
 def separate_vocals(input_path: str, output_dir: str = "output") -> str:
     try:
-        # 加载音频文件
-        waveform, rate = sf.read(input_path)  # 使用 soundfile 读取音频
+        # 根据当前时间生成输出 WAV 文件的路径
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        wav_output_path = f"temp_audio/converted_{timestamp}.wav"  # 使用时间戳命名输出文件
+        
+        # 确保临时目录存在
+        os.makedirs(os.path.dirname(wav_output_path), exist_ok=True)
+
+        # 先转换为 WAV 格式
+        convert_to_wav(input_path, wav_output_path)
+
+        # 使用 librosa 读取音频文件
+        waveform, rate = librosa.load(wav_output_path, sr=None, mono=False)  # sr=None 保持原采样率
         audio_tensor = torch.from_numpy(waveform).float()  # 转换为 PyTorch 张量
+
+        # 打印音频文件的详细信息
+        print(f"音频文件采样率: {rate}, 音频形状: {audio_tensor.shape}")
 
         # 确保音频是单声道
         if audio_tensor.ndim > 1:
@@ -223,7 +231,6 @@ def separate_vocals(input_path: str, output_dir: str = "output") -> str:
         tq_person_dir.mkdir(exist_ok=True)  # 确保 tq_person 文件夹存在
 
         # 根据当前时间生成文件名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         vocal_path = tq_person_dir / f"vocals_{timestamp}.wav"  # 使用时间戳命名文件
 
         # 调整张量形状并保存
@@ -369,11 +376,11 @@ if __name__ == '__main__':
         uvicorn.run(
             "server:app",
             host="0.0.0.0",
-            port=6712,
+            port=6775,
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
             ws="websockets",
-            workers=2
+            workers=1
         )
     except Exception as e:
         logging.error(f"服务器启动失败: {str(e)}", exc_info=True)
