@@ -169,7 +169,7 @@ def sanitize_filename(filename: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', '_', filename)
 
 @app.post("/inference/remove-background")
-async def remove_background(audio_file: UploadFile = File(...)):
+async def remove_background(audio_file: UploadFile = File(...), enable_compression: bool = Form(False)):
     # 清理文件名
     safe_filename = sanitize_filename(audio_file.filename)
     temp_path = f"temp_audio/{safe_filename}" 
@@ -180,9 +180,9 @@ async def remove_background(audio_file: UploadFile = File(...)):
         f.write(content) 
     
     # 执行分离 
-    output_path = separate_vocals(temp_path)
+    output_path = separate_vocals(temp_path, enable_compression=enable_compression)
 
-    # 返回结果 
+    # 返回分离结果
     return FileResponse(
         output_path,
         media_type="audio/wav",
@@ -196,7 +196,29 @@ def convert_to_wav(input_path: str, output_path: str) -> None:
     except Exception as e:
         raise RuntimeError(f"音频转换失败: {str(e)}")
 
-def separate_vocals(input_path: str, output_dir: str = "output") -> str:
+def compress_audio(input_path: str, output_path: str, target_size_mb: float = 5.0) -> str:
+    """压缩音频文件，确保文件小于指定大小"""
+    target_size_bytes = target_size_mb * 1024 * 1024  # 转换为字节
+    bitrate = 128  # 初始比特率
+
+    while True:
+        try:
+            # 使用 ffmpeg 压缩音频
+            ffmpeg.input(input_path).output(output_path, acodec='mp3', audio_bitrate=f'{bitrate}k').run(overwrite_output=True)
+            
+            # 检查文件大小
+            if os.path.getsize(output_path) <= target_size_bytes:
+                return output_path  # 返回压缩后的文件路径
+            else:
+                # 如果文件太大，降低比特率
+                if bitrate > 32:  # 设置最低比特率限制
+                    bitrate -= 16  # 每次降低 16k
+                else:
+                    raise RuntimeError("无法将音频压缩到小于 5MB，请尝试使用更短的音频文件或更低的质量设置。")
+        except Exception as e:
+            raise RuntimeError(f"音频压缩失败: {str(e)}")
+
+def separate_vocals(input_path: str, output_dir: str = "output", enable_compression: bool = False) -> str:
     try:
         # 根据当前时间生成输出 WAV 文件的路径
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -237,9 +259,16 @@ def separate_vocals(input_path: str, output_dir: str = "output") -> str:
         vocals = estimates['vocals'].squeeze(0)  # 去掉多余的维度
         sf.write(str(vocal_path), vocals.numpy().T, rate)  # 保存人声
 
-        return str(vocal_path)
+        # 如果需要压缩音频
+        if enable_compression:
+            compressed_output_path = f"temp_audio/compressed_{timestamp}.mp3"  # 压缩后的文件名
+            compress_audio(vocal_path, compressed_output_path)  # 压缩音频
+            return compressed_output_path  # 返回压缩后的文件路径
+
+        return str(vocal_path)  # 返回分离后的人声路径
     except Exception as e:
-        raise RuntimeError(f"音频处理失败: {str(e)}")
+        logging.error(f"音频处理失败: {str(e)}")  # 记录错误信息
+        return ""  # 返回空字符串以指示失败
 
 # websocket-------------------------------------------------------------------------------
 
