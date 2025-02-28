@@ -164,17 +164,37 @@ os.makedirs(output_dir, exist_ok=True)
 
 @app.post("/inference/remove-background")
 async def remove_background(audio_file: UploadFile = File(...)):
-     # 保存临时文件 
-    temp_path = f"temp_audio/{audio_file.filename}" 
-    os.makedirs(os.path.dirname(temp_path),  exist_ok=True)
     
-    with open(temp_path, "wb") as f:
-        content = await audio_file.read() 
-        f.write(content) 
+    # # 读取音频文件内容
+    # audio_data = await audio_file.read()
     
+    # # 使用 convert_audio_to_16k 转换音频为 16kHz WAV 格式
+    # converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))  # 调用转换函数
+
+    # # 将转换后的音频保存为临时文件
+    # wav_temp_path = f"temp_audio/{os.path.splitext(audio_file.filename)[0]}.wav"
+    # with open(wav_temp_path, "wb") as wav_file:
+    #     wav_file.write(converted_audio)
+
+    # # 执行分离 
+    # output_path = separate_vocals(wav_temp_path)
+
+
+    # 读取音频文件内容
+    audio_data = await audio_file.read()
+    
+    # 使用 convert_audio_to_16k 转换音频为 16kHz WAV 格式
+    converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))  # 调用转换函数
+
+    # 将转换后的音频保存为临时文件
+    wav_temp_path = f"temp_audio/{os.path.splitext(audio_file.filename)[0]}.wav"
+    with open(wav_temp_path, "wb") as wav_file:
+        wav_file.write(converted_audio)
+
     # 执行分离 
-    output_path = separate_vocals(temp_path)
-     # 返回结果 
+    output_path = separate_vocals(wav_temp_path)
+
+    # 返回结果 
     return FileResponse(
         output_path,
         media_type="audio/wav",
@@ -353,7 +373,7 @@ if __name__ == '__main__':
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
             ws="websockets",
-            workers=1
+            workers=2
         )
     except Exception as e:
         logging.error(f"服务器启动失败: {str(e)}", exc_info=True)
