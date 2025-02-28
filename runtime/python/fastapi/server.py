@@ -137,7 +137,7 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
         .filter('volume', '3dB')  # 降低音量增益
         .filter('atrim', duration=29)
         .output('pipe:1', 
-                ar='16000',  # 采样率
+                ar='18000',  # 采样率
                 ac='1',      # 单声道
                 format='wav',
                 acodec='pcm_s16le',  # 使用16位PCM编码
@@ -153,8 +153,8 @@ async def saveShot(fileName: str = Form(...), prompt_wav: UploadFile = File(...)
     audio_data = await prompt_wav.read()
     converted_audio = convert_audio_to_16k(io.BytesIO(audio_data))
     with io.BytesIO(converted_audio) as f:
-        prompt_speech_16k =  postprocess(load_wav(f, 16000))
-    torchaudio.save(f"./py_data/{fileName}.wav", prompt_speech_16k, 16000, format="wav")
+        prompt_speech_16k =  postprocess(load_wav(f, 18000))
+    torchaudio.save(f"./py_data/{fileName}.wav", prompt_speech_16k, 18000, format="wav")
     torch.save(prompt_speech_16k, f"./py_data/{fileName}.pt", _use_new_zipfile_serialization=True)       
     return True           
 

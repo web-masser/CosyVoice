@@ -26,16 +26,11 @@ from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
 from cosyvoice.utils.file_utils import load_wav, logging
 from cosyvoice.utils.common import set_all_random_seed
 
-import onnxruntime as ort
-print("可用的 Provider:", ort.get_available_providers())
-print("ONNX Runtime 版本:", ort.__version__)
+# 检查是否可以使用 GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
-import tensorrt as trt
-print("TensorRT 版本:", trt.__version__)
 
-# 创建 TensorRT logger 测试
-logger = trt.Logger(trt.Logger.INFO)
-print("TensorRT logger 创建成功")
 
 inference_mode_list = ['预训练音色', '3s极速复刻', '跨语种复刻', '自然语言控制']
 instruct_dict = {'预训练音色': '1. 选择预训练音色\n2. 点击生成音频按钮',
@@ -79,15 +74,15 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
     else:
         prompt_wav = None
     # if instruct mode, please make sure that model is iic/CosyVoice-300M-Instruct and not cross_lingual mode
-    # if mode_checkbox_group in ['自然语言控制']:
-    #     if cosyvoice.frontend.instruct is False:
-    #         gr.Warning('您正在使用自然语言控制模式, {}模型不支持此模式, 请使用iic/CosyVoice-300M-Instruct模型'.format(args.model_dir))
-    #         yield (cosyvoice.sample_rate, default_data)
-    #     if instruct_text == '':
-    #         gr.Warning('您正在使用自然语言控制模式, 请输入instruct文本')
-    #         yield (cosyvoice.sample_rate, default_data)
-    #     if prompt_wav is not None or prompt_text != '':
-    #         gr.Info('您正在使用自然语言控制模式, prompt音频/prompt文本会被忽略')
+    if mode_checkbox_group in ['自然语言控制']:
+        if cosyvoice.instruct is False:
+            gr.Warning('您正在使用自然语言控制模式, {}模型不支持此模式, 请使用iic/CosyVoice-300M-Instruct模型'.format(args.model_dir))
+            yield (cosyvoice.sample_rate, default_data)
+        if instruct_text == '':
+            gr.Warning('您正在使用自然语言控制模式, 请输入instruct文本')
+            yield (cosyvoice.sample_rate, default_data)
+        if prompt_wav is not None or prompt_text != '':
+            gr.Info('您正在使用自然语言控制模式, prompt音频/prompt文本会被忽略')
     # if cross_lingual mode, please make sure that model is iic/CosyVoice-300M and tts_text prompt_text are different language
     if mode_checkbox_group in ['跨语种复刻']:
         if cosyvoice.instruct is True:
@@ -141,15 +136,13 @@ def generate_audio(tts_text, mode_checkbox_group, sft_dropdown, prompt_text, pro
             yield (cosyvoice.sample_rate, i['tts_speech'].numpy().flatten())
     else:
         logging.info('get instruct inference request')
-        # prompt_speech_16k = postprocess(load_wav(prompt_wav, prompt_sr))
-        prompt_speech_16k = torch.load(f"./runtime/python/fastapi/py_data/20250121105025.pt")
         set_all_random_seed(seed)
-        for i in cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_speech_16k, stream=stream):
+        for i in cosyvoice.inference_instruct(tts_text, sft_dropdown, instruct_text, stream=stream, speed=speed):
             yield (cosyvoice.sample_rate, i['tts_speech'].numpy().flatten())
 
 
 def main():
-    with gr.Blocks(analytics_enabled=False) as demo:
+    with gr.Blocks() as demo:
         gr.Markdown("### 代码库 [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) \
                     预训练模型 [CosyVoice-300M](https://www.modelscope.cn/models/iic/CosyVoice-300M) \
                     [CosyVoice-300M-Instruct](https://www.modelscope.cn/models/iic/CosyVoice-300M-Instruct) \
@@ -184,8 +177,7 @@ def main():
                               outputs=[audio_output])
         mode_checkbox_group.change(fn=change_instruction, inputs=[mode_checkbox_group], outputs=[instruction_text])
     demo.queue(max_size=4, default_concurrency_limit=2)
-    demo.launch(server_name='0.0.0.0', 
-               server_port=args.port)
+    demo.launch(server_name='0.0.0.0', server_port=args.port)
 
 
 if __name__ == '__main__':
@@ -211,6 +203,7 @@ if __name__ == '__main__':
         sft_spk = ['']
     prompt_sr = 16000
     default_data = np.zeros(cosyvoice.sample_rate)
-    main()
 
     
+
+    main()
