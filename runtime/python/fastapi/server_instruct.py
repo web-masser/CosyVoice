@@ -200,13 +200,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         
                         if data.get("tone") not in [None, ""]:
                             if data.get("language") not in [None, ""]:
-                                instruct_text += data["tone"] + data["language"]
+                                instruct_text += data["tone"] + "的语气说" + data["language"]
                             else:
                                 instruct_text += data["tone"] + "的语气"
                         elif data.get("language") not in [None, ""]:
-                            instruct_text += data["language"] + "的语气"
+                            instruct_text += data["language"] + "说"
                             
-                        instruct_text += "说"
                         print('inference_instruct2', data["tts_text"], instruct_text, prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
                         return cosyvoice2.inference_instruct2(
                             data["tts_text"],
