@@ -121,15 +121,49 @@ app.add_middleware(
 
 max_val = 0.8
 def postprocess(speech, top_db=60, hop_length=220, win_length=440):
-    speech, _ = librosa.effects.trim(
-        speech, top_db=top_db,
-        frame_length=win_length,
-        hop_length=hop_length
-    )
-    if speech.abs().max() > max_val:
-        speech = speech / speech.abs().max() * max_val
-    speech = torch.concat([speech, torch.zeros(1, int(cosyvoice.sample_rate * 0.2))], dim=1)
-    return speech
+    # 检查输入音频是否为空或太短
+    if speech.numel() == 0 or speech.shape[-1] < win_length:
+        print(f"警告: 输入音频太短或为空: {speech.shape}")
+        # 返回一个小的默认音频片段而不是空音频
+        return torch.zeros(1, int(cosyvoice.sample_rate * 0.5)) + 0.01
+    
+    # 检查音频是否全是静音或噪音
+    if speech.abs().max() < 0.01:
+        print(f"警告: 输入音频可能全是静音: max={speech.abs().max()}")
+        return torch.zeros(1, int(cosyvoice.sample_rate * 0.5)) + 0.01
+        
+    try:
+        # 保存原始音频以便回退
+        original_speech = speech.clone()
+        
+        # 尝试trim处理
+        speech, _ = librosa.effects.trim(
+            speech, top_db=top_db,
+            frame_length=win_length,
+            hop_length=hop_length
+        )
+        
+        # 再次检查trim后的音频是否太短
+        if speech.numel() == 0 or speech.shape[-1] < hop_length*2:
+            print(f"警告: 音频trim后太短: {speech.shape}")
+            speech = original_speech  # 回退到原始音频
+            
+        # 音量归一化
+        if speech.abs().max() > max_val:
+            speech = speech / speech.abs().max() * max_val
+        elif speech.abs().max() < 0.1:  # 如果音量太小
+            speech = speech / speech.abs().max() * 0.5  # 提高到适中音量
+            
+        # 添加尾部静音
+        speech = torch.concat([speech, torch.zeros(1, int(cosyvoice.sample_rate * 0.2))], dim=1)
+        
+        print(f"处理后音频信息: shape={speech.shape}, min={speech.min():.4f}, max={speech.max():.4f}, mean={speech.mean():.4f}")
+        return speech
+        
+    except Exception as e:
+        print(f"音频处理出错: {str(e)}")
+        # 返回一个安全的默认音频而不是失败
+        return torch.zeros(1, int(cosyvoice.sample_rate * 0.5)) + 0.01
 
 def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     # 使用 ffmpeg 转换音频到 16kHz

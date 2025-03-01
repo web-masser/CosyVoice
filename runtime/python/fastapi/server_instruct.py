@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
         cosyvoice2 = CosyVoice2('D:/project/CosyVoice/pretrained_models/CosyVoice2-0.5B', 
                               load_jit=True, 
                               load_trt=False, 
-                              fp16=False,
+                              fp16=True,
                               device_id=worker_gpu)  # 修改这里，直接传递设备对象
         
         yield
