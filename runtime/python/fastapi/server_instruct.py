@@ -295,7 +295,7 @@ if __name__ == '__main__':
         uvicorn.run(
             "server_instruct:app",
             host="0.0.0.0",
-            port=6715,
+            port=6775,
             ssl_keyfile="./mznpy.com.key",
             ssl_certfile="./mznpy.com.pem",
             ws="websockets",
