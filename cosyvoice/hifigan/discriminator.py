@@ -108,7 +108,7 @@ class DiscriminatorR(nn.Module):
         # Remove DC offset
         x = x - x.mean(dim=-1, keepdims=True)
         # Peak normalize the volume of input audio
-        x = 1.1 * x / (x.abs().max(dim=-1, keepdim=True)[0] + 1e-9)
+        x = 0.8 * x / (x.abs().max(dim=-1, keepdim=True)[0] + 1e-9)
         x = self.spec_fn(x)
         x = torch.view_as_real(x)
         x = rearrange(x, "b f t c -> b c t f")

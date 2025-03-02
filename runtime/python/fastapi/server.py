@@ -170,7 +170,7 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     out, _ = (
         ffmpeg
         .input('pipe:0')
-        .filter('volume', '3dB')  # 降低音量增益
+        .filter('volume', '7dB')  # 降低音量增益
         .filter('atrim', duration=20)
         .output('pipe:1', 
                 ar='18000',  # 采样率
