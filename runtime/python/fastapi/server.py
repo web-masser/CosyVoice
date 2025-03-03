@@ -33,6 +33,7 @@ import torchaudio
 import librosa
 import soundfile as sf
 import noisereduce as nr
+from pydub import AudioSegment 
 
 import random
 from pathlib import Path
@@ -120,7 +121,7 @@ app.add_middleware(
 )
 
 max_val = 0.8
-def postprocess(speech, top_db=60, hop_length=220, win_length=440):
+def postprocess(speech, top_db=120, hop_length=220, win_length=440):
     # 检查输入音频是否为空或太短
     if speech.numel() == 0 or speech.shape[-1] < win_length:
         print(f"警告: 输入音频太短或为空: {speech.shape}")
@@ -153,7 +154,6 @@ def postprocess(speech, top_db=60, hop_length=220, win_length=440):
             speech = speech / speech.abs().max() * max_val
         elif speech.abs().max() < 0.1:  # 如果音量太小
             speech = speech / speech.abs().max() * 0.5  # 提高到适中音量
-            
         # 添加尾部静音
         speech = torch.concat([speech, torch.zeros(1, int(cosyvoice.sample_rate * 0.2))], dim=1)
         
@@ -170,15 +170,11 @@ def convert_audio_to_16k(input_audio: io.BytesIO) -> bytes:
     out, _ = (
         ffmpeg
         .input('pipe:0')
-        .filter('volume', '7dB')  # 降低音量增益
+        .filter('volume', '7dB') 
         .filter('atrim', duration=20)
         .output('pipe:1', 
-                ar='18000',  # 采样率
-                ac='1',      # 单声道
+                ar='18000',
                 format='wav',
-                acodec='pcm_s16le',  # 使用16位PCM编码
-                audio_bitrate='64k',  # 降低比特率
-                compression_level='5'  # 压缩级别
         )
         .run(input=input_audio.read(), capture_stdout=True, capture_stderr=True)
     )
@@ -388,8 +384,22 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 for i in model_output:
                     try:
                         all_speech.append(i['tts_speech'])
-                        tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
-                        # 确保数据大小合适
+                        # tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
+                        raw_audio = i['tts_speech'].numpy()
+                        tts_audio_int16 = (raw_audio * (2 ** 15)).astype(np.int16) 
+                        audio_segment = AudioSegment(
+                            tts_audio_int16.tobytes(), 
+                            frame_rate=16000,  # 根据 self.sample_rate  替换实际采样率
+                            sample_width=2,    # 16-bit = 2 bytes 
+                            channels=1         # 单声道 
+                        )
+                         
+                        # 安全增益调节（建议范围：-6dB ~ +6dB）
+                        adjusted_audio = audio_segment.apply_gain(6)   # +6dB 放大 
+                        
+                        # 转回字节流
+                        tts_audio = adjusted_audio.raw_data  
+
                         if len(tts_audio) > 0:
                             await websocket.send_bytes(tts_audio)
                             await asyncio.sleep(0.01)  # 添加延迟
