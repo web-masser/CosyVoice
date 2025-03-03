@@ -460,19 +460,35 @@ def release_resources():
     logging.info("所有资源已释放")
 
 if __name__ == '__main__':
-    clear_gpu_ids()  # 在服务器启动前清空 GPU ID 文件
+    clear_gpu_ids()
     try:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        
+        # 添加更多的日志记录
         logging.info("服务器开始启动")
-        uvicorn.run(
+        
+        config = uvicorn.Config(
             "server:app",
             host="0.0.0.0",
             port=6712,
             ssl_keyfile="./mznpy.com.key",
-            ssl_certfile="./mznpy.com.pem",
+            ssl_certfile="./mznpy.com.  pem",
             ws="websockets",
-            workers=1
+            workers=1,
+            timeout_keep_alive=65,  # 增加保持连接的超时时间
+            loop="auto",  # 使用自动选择的事件循环
+            log_level="debug",  # 开启详细日志
+            access_log=True,
+            reload=False  # 禁用自动重载以提高稳定性
         )
+        
+        server = uvicorn.Server(config)
+        server.run()
+        
     except Exception as e:
         logging.error(f"服务器启动失败: {str(e)}", exc_info=True)
     finally:
-        release_resources()  # 确保在程序结束时释放所有资源
+        release_resources()
