@@ -171,109 +171,136 @@ class ConnectionManager:
         if client_id in self.active_connections:
             del self.active_connections[client_id]
 
+    def is_connected(self, client_id: str) -> bool:
+        return client_id in self.active_connections and \
+               self.active_connections[client_id].client_state != "disconnected"
+
     async def send_audio(self, client_id: str, audio_data: bytes):
-        if client_id in self.active_connections:
-            await self.active_connections[client_id].send_bytes(audio_data)
+        if self.is_connected(client_id):
+            try:
+                await self.active_connections[client_id].send_bytes(audio_data)
+                return True
+            except Exception as e:
+                print(f"发送音频数据失败: {str(e)}")
+                return False
+        return False
 
 
 manager = ConnectionManager()
 
-@app.websocket("/ws/audio2/{client_id}")
+@app.websocket("/ws/audio/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     print("尝试建立 WebSocket 连接...")
-    await websocket.accept()
-    print("WebSocket 连接已接受")
+    connection_closed = False  # 添加标志来追踪连接状态
+    
     try:
-        # 用于收集整段合成结果，后续写成单个文件
+        await manager.connect(websocket, client_id)
+        print(f"客户端 {client_id} WebSocket 连接已建立")
+        
         all_speech = []
-
+        
         while True:
-            data = await websocket.receive_json()
-            print(f"收到客户端消息: {data}")
-            
-            if data['type'] == 'generate':
-                prompt_speech_16k = torch.load(f"./py_data/{data['file_name']}.pt")
+            try:
+                data = await websocket.receive_json()
+                print(f"收到客户端消息: {data}")
                 
-                def run_inference():
-                    if (data.get("language") not in [None, ""] or data.get("tone") not in [None, ""]):
-                        instruct_text = "用"
-                        
-                        if data.get("tone") not in [None, ""]:
-                            if data.get("language") not in [None, ""]:
-                                instruct_text += data["tone"] + data["language"]
-                            else:
-                                instruct_text += data["tone"] + "的语气"
-                        elif data.get("language") not in [None, ""]:
-                            instruct_text += data["language"] + "的语气"
-                            
-                        instruct_text += "说"
-                        print('inference_instruct2', data["tts_text"], instruct_text, prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
-                        return cosyvoice2.inference_instruct2(
-                            data["tts_text"],
-                            instruct_text,
-                            prompt_speech_16k,
-                            stream=data.get("stream", True),
-                            speed=data.get("speed", 1.0)
-                        )
-                    elif data.get("prompt_text", "") not in [None, ""]:                                                           
-                        print('inference_zero_shot', data["tts_text"], data["prompt_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
-                        return cosyvoice.inference_zero_shot(
-                            data["tts_text"],
-                            data["prompt_text"],
-                            prompt_speech_16k,
-                            stream=data.get("stream", True),
-                            speed=data.get("speed", 1.0)
-                        )
-                    else:
-                        print('inference_cross_lingual', data["tts_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
-                        return cosyvoice.inference_cross_lingual(
-                            data["tts_text"],
-                            prompt_speech_16k,
-                            stream=data.get("stream", True),
-                            speed=data.get("speed", 1.0)
-                        )
-                
-                print("开始执行推理...")
-                future = app.state.thread_pool.submit(run_inference)
-                model_output = await asyncio.wrap_future(future)
-                print("推理完成，开始发送数据...")
-                
-                # 发送音频数据
-                for i in model_output:
-                    try:
-                        all_speech.append(i['tts_speech'])
-                        
-
-                        tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
-                        # 确保数据大小合适
-                        if len(tts_audio) > 0:
-                            await websocket.send_bytes(tts_audio)
-                            await asyncio.sleep(0.01)  # 添加延迟
-                    except Exception as e:
-                        print(f"发送音频数据时出错: {str(e)}")
-                        break
-                
-                try:
-                    # 发送完成信号
-                    await websocket.send_json({"type": "complete", "status": "success"})
-                    print("发送完成信号")
-                    await asyncio.sleep(0.1)  # 等待客户端处理
-                except Exception as e:
-                    print(f"发送完成信号时出错: {str(e)}")
+                if data['type'] == 'generate':
+                    prompt_speech_16k = torch.load(f"./py_data/{data['file_name']}.pt")
                     
+                    def run_inference():
+                        if (data.get("language") not in [None, ""] or data.get("tone") not in [None, ""]):
+                            instruct_text = "用"
+                            
+                            if data.get("tone") not in [None, ""]:
+                                if data.get("language") not in [None, ""]:
+                                    instruct_text += data["tone"] + data["language"]
+                                else:
+                                    instruct_text += data["tone"] + "的语气"
+                            elif data.get("language") not in [None, ""]:
+                                instruct_text += data["language"] + "的语气"
+                                
+                            instruct_text += "说"
+                            print('inference_instruct2', data["tts_text"], instruct_text, prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
+                            return cosyvoice2.inference_instruct2(
+                                data["tts_text"],
+                                instruct_text,
+                                prompt_speech_16k,
+                                stream=data.get("stream", True),
+                                speed=data.get("speed", 1.0)
+                            )
+                        elif data.get("prompt_text", "") not in [None, ""]:                                                           
+                            print('inference_zero_shot', data["tts_text"], data["prompt_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
+                            return cosyvoice.inference_zero_shot(
+                                data["tts_text"],
+                                data["prompt_text"],
+                                prompt_speech_16k,
+                                stream=data.get("stream", True),
+                                speed=data.get("speed", 1.0)
+                            )
+                        else:
+                            print('inference_cross_lingual', data["tts_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
+                            return cosyvoice.inference_cross_lingual(
+                                data["tts_text"],
+                                prompt_speech_16k,
+                                stream=data.get("stream", True),
+                                speed=data.get("speed", 1.0)
+                            )
+                    
+                    print("开始执行推理...")
+                    future = app.state.thread_pool.submit(run_inference)
+                    model_output = await asyncio.wrap_future(future)
+                    print("推理完成，开始发送数据...")
+                    
+                    # 修改发送逻辑，增加连接状态检查
+                    for i in model_output:
+                        if websocket.client_state == "disconnected":
+                            print("客户端已断开连接")
+                            break
+                            
+                        try:
+                            all_speech.append(i['tts_speech'])
+                            tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
+                            if len(tts_audio) > 0:
+                                await websocket.send_bytes(tts_audio)
+                                await asyncio.sleep(0.01)
+                        except Exception as e:
+                            print(f"发送音频数据时出错: {str(e)}")
+                            break
+                    
+                    # 只在连接仍然活跃时发送完成信号
+                    if websocket.client_state != "disconnected":
+                        try:
+                            await websocket.send_json({"type": "complete", "status": "success"})
+                            print("发送完成信号")
+                            await asyncio.sleep(0.1)
+                        except Exception as e:
+                            print(f"发送完成信号时出错: {str(e)}")
+                            break
+                
+            except WebSocketDisconnect:
+                print(f"客户端 {client_id} 断开连接")
+                connection_closed = True  # 标记连接已关闭
+                break
+            except Exception as e:
+                print(f"WebSocket处理过程中发生错误: {str(e)}")
+                break
     except Exception as e:
-        if str(e):  # 只有在有实际错误信息时才记录
+        if str(e):
             logging.error(f"WebSocket error: {str(e)}")
             print(f"发生错误: {str(e)}")
     finally:
         try:
-            # 使用标准的关闭代码
-            if not websocket.application_state == "closed":
+            manager.disconnect(client_id)
+            print(f"客户端 {client_id} 连接已清理")
+            
+            # 只在连接未关闭且状态正常时尝试关闭
+            if not connection_closed and \
+               websocket.client_state != "disconnected" and \
+               websocket.application_state != "closed":
                 await websocket.close(code=1000, reason="Normal closure")
+                
         except Exception as e:
             print(f"关闭连接时出错: {str(e)}")
-        manager.disconnect(client_id)
-        print(f"客户端 {client_id} 断开连接")
 # -------------------------------------------------------------------------------  
 
 def clear_gpu_ids():
