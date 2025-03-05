@@ -373,6 +373,15 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             )
                         elif data.get("prompt_text", "") not in [None, ""]:                                                           
                             print('inference_zero_shot', data["tts_text"], data["prompt_text"], prompt_speech_16k, data.get("stream", True), data.get("speed", 1.0))
+                            
+                            # 检查prompt_speech_16k是否为全零张量
+                            if torch.all(prompt_speech_16k == 0):
+                                websocket.send_json({
+                                    "type": "error",
+                                    "message": "音色录制异常，请重新录制音色"
+                                })
+                                return
+                                
                             return cosyvoice.inference_zero_shot(
                                 data["tts_text"],
                                 data["prompt_text"],
@@ -470,23 +479,20 @@ if __name__ == '__main__':
         # 添加更多的日志记录
         logging.info("服务器开始启动")
         
-        config = uvicorn.Config(
+        uvicorn.run(
             "server:app",
             host="0.0.0.0",
             port=6712,
             ssl_keyfile="./mznpy.com.key",
-            ssl_certfile="./mznpy.com.  pem",
+            ssl_certfile="./mznpy.com.pem",
             ws="websockets",
-            workers=1,
+            workers=2,
             timeout_keep_alive=65,  # 增加保持连接的超时时间
             loop="auto",  # 使用自动选择的事件循环
             log_level="debug",  # 开启详细日志
             access_log=True,
             reload=False  # 禁用自动重载以提高稳定性
         )
-        
-        server = uvicorn.Server(config)
-        server.run()
         
     except Exception as e:
         logging.error(f"服务器启动失败: {str(e)}", exc_info=True)

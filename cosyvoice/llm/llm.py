@@ -146,13 +146,21 @@ class TransformerLM(torch.nn.Module):
             ignore_eos: bool = True,
     ):
         num_trials, max_trials = 0, 100
+        last_top_ids = None
         while True:
             top_ids = self.sampling(weighted_scores, decoded_tokens, sampling)
+            last_top_ids = top_ids  # 保存最后一次采样结果
             if (not ignore_eos) or (self.speech_token_size not in top_ids):
                 break
             num_trials += 1
             if num_trials > max_trials:
-                raise RuntimeError('sampling reaches max_trials {} and still get eos when ignore_eos is True, check your input!'.format(max_trials))
+                # 不再抛出异常，而是记录警告并返回最后一次采样结果
+                logging.warning('采样达到最大尝试次数 {}, 但仍然得到 EOS. 将使用最后一次采样结果继续.'.format(max_trials))
+                # 如果需要，可以强制返回一个非EOS的token
+                if self.speech_token_size in last_top_ids:
+                    # 返回一个替代token，比如speech_token_size-1
+                    return torch.tensor(self.speech_token_size-1, device=weighted_scores.device)
+                return last_top_ids
         return top_ids
 
     @torch.inference_mode()
