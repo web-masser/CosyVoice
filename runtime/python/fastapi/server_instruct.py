@@ -182,7 +182,7 @@ manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         print("尝试建立 WebSocket 连接...")
-        await manager.connect(websocket, client_id)  # 使用manager来管理连接
+        await manager.connect(websocket, client_id)
         print("WebSocket 连接已接受")
 
         # 用于收集整段合成结果
@@ -259,6 +259,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     if websocket.client_state != "disconnected":
                         await websocket.send_json({"type": "complete", "status": "success"})
                         print("发送完成信号")
+                        await asyncio.sleep(0.5)
+                            # 主动断开连接
+                        await websocket.close(code=1000, reason="Task completed")
                         
             except Exception as e:
                 if not isinstance(e, RuntimeError) or "websocket.send" not in str(e):
@@ -267,11 +270,16 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
     except Exception as e:
         logging.error(f"WebSocket error: {str(e)}")
-        print(f"发生错误: {str(e)}")
         
     finally:
         manager.disconnect(client_id)
         print(f"客户端 {client_id} 断开连接")
+        if websocket.client_state != "disconnected":
+            try:
+                await websocket.close(code=1000, reason="Task completed")
+            except Exception as e:
+                logging.error(f"关闭WebSocket连接时出错: {str(e)}")
+
 # -------------------------------------------------------------------------------  
 
 def clear_gpu_ids():

@@ -334,7 +334,7 @@ manager = ConnectionManager()
 @app.websocket("/ws/audio/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     print("尝试建立 WebSocket 连接...")
-    connection_closed = False  # 添加标志来追踪连接状态
+    connection_closed = False
     
     try:
         await manager.connect(websocket, client_id)
@@ -419,19 +419,22 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             print(f"发送音频数据时出错: {str(e)}")
                             break
                     
-                    # 只在连接仍然活跃时发送完成信号
+                    # 发送完成信号后主动断开连接
                     if websocket.client_state != "disconnected":
                         try:
                             await websocket.send_json({"type": "complete", "status": "success"})
                             print("发送完成信号")
-                            await asyncio.sleep(0.1)
+                            await asyncio.sleep(0.5)
+                            # 主动断开连接
+                            await websocket.close(code=1000, reason="Task completed")
+                            break  # 退出循环
                         except Exception as e:
                             print(f"发送完成信号时出错: {str(e)}")
                             break
                 
             except WebSocketDisconnect:
                 print(f"客户端 {client_id} 断开连接")
-                connection_closed = True  # 标记连接已关闭
+                connection_closed = True
                 break
             except Exception as e:
                 print(f"WebSocket处理过程中发生错误: {str(e)}")
